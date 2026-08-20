@@ -817,7 +817,7 @@ function Footer() {
       <div style={S.footerRule} />
       <p style={S.footerText}>
         {BACKEND === "supabase"
-          ? "Live · seats update in real time"
+          ? "Live · seats sync automatically"
           : "Demo preview · bookings reset on refresh"}
       </p>
     </footer>

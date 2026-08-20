@@ -64,19 +64,21 @@ export function useSupabaseBookings() {
       if (active) setLoading(false);
     })();
 
-    // Live updates: any booking change re-pulls the seat counts.
-    const ch = supabase
-      .channel("bookings-changes")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "bookings" },
-        () => refreshSeats()
-      )
-      .subscribe();
+    // Keep seat counts fresh across users. We poll the seats_left view
+    // (counts only) rather than subscribing to `bookings` over Realtime:
+    // RLS hides raw bookings from the anon key, so Realtime would deliver
+    // no events to anon clients anyway. Polling + refresh-on-focus is
+    // simpler and respects the same privacy model. Mutations also call
+    // refreshSeats() immediately, so the booker sees their own change now.
+    const POLL_MS = 15000;
+    const timer = setInterval(refreshSeats, POLL_MS);
+    const onFocus = () => refreshSeats();
+    window.addEventListener("focus", onFocus);
 
     return () => {
       active = false;
-      supabase.removeChannel(ch);
+      clearInterval(timer);
+      window.removeEventListener("focus", onFocus);
     };
   }, [refreshSeats]);
 
