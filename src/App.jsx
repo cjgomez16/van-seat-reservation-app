@@ -6,10 +6,16 @@ import {
   EVENT_DATE,
   COUPLE,
   VENUE,
+  BOARDING_NOTE,
   runKey,
   findTrip,
   findRunContext,
 } from "./config.js";
+
+// "Van 1" or "Van 1 · ABC 1234" when a plate is set.
+function vanLabel(name, plate) {
+  return plate ? `${name} · ${plate}` : name;
+}
 import { useBookings, BACKEND } from "./store.js";
 import { S, GLOBAL_CSS } from "./styles.js";
 
@@ -92,9 +98,14 @@ function BookFlow({ store }) {
     setStep("van");
   }
 
-  function chooseRun(vanId, vanName, tripId) {
-    if (store.seatsLeft(vanId, tripId) <= 0) return;
-    setSelectedRun({ vanId, vanName, tripId });
+  function chooseRun(van, tripId) {
+    if (store.seatsLeft(van.id, tripId) <= 0) return;
+    setSelectedRun({
+      vanId: van.id,
+      vanName: van.name,
+      plate: van.plate ?? null,
+      tripId,
+    });
     setNames([""]);
     setError("");
     setStep("form");
@@ -127,7 +138,7 @@ function BookFlow({ store }) {
       pointRole: service.pointRole,
       point: selectedPoint.name,
       pointNote: selectedPoint.note,
-      van: selectedRun.vanName,
+      van: vanLabel(selectedRun.vanName, selectedRun.plate),
       trip: trip.label,
       time: trip.time,
       names: clean,
@@ -332,7 +343,7 @@ function ManageView({ store }) {
             </div>
             <div style={S.ticketRow}>
               <span>Van</span>
-              <strong>{ctx.van.name}</strong>
+              <strong>{vanLabel(ctx.van.name, ctx.van.plate)}</strong>
             </div>
             <div style={S.ticketRow}>
               <span>Departure</span>
@@ -378,7 +389,12 @@ function ManageView({ store }) {
           heading="Edit your booking"
           service={ctx.service}
           point={ctx.point}
-          run={{ vanId: ctx.van.id, vanName: ctx.van.name, tripId: ctx.trip.id }}
+          run={{
+            vanId: ctx.van.id,
+            vanName: ctx.van.name,
+            plate: ctx.van.plate,
+            tripId: ctx.trip.id,
+          }}
           names={names}
           setNames={setNames}
           booker={booker}
@@ -503,7 +519,7 @@ function AdminView({ store }) {
               <div key={r.id} style={S.runGroup}>
                 <div style={S.runGroupHead}>
                   <span>
-                    {r.van.name} · {r.trip.label}
+                    {vanLabel(r.van.name, r.van.plate)} · {r.trip.label}
                   </span>
                   <span style={{ fontSize: 14, color: "#a4562a" }}>
                     {taken}/{SEATS_PER_RUN} seats
@@ -705,7 +721,7 @@ function VanStep({ n, service, point, seatsLeft, onBack, onChoose }) {
       <div style={S.vanList}>
         {point.vans.map((v) => (
           <div key={v.id} style={S.vanCard}>
-            <div style={S.vanHead}>{v.name}</div>
+            <div style={S.vanHead}>{vanLabel(v.name, v.plate)}</div>
             <div className="rustic-trip-row">
               {service.trips.map((t) => {
                 const left = seatsLeft(v.id, t.id);
@@ -715,7 +731,7 @@ function VanStep({ n, service, point, seatsLeft, onBack, onChoose }) {
                   <button
                     key={t.id}
                     disabled={full}
-                    onClick={() => onChoose(v.id, v.name, t.id)}
+                    onClick={() => onChoose(v, t.id)}
                     className={full ? "" : "rustic-card"}
                     style={{
                       ...S.tripBtn,
@@ -737,6 +753,7 @@ function VanStep({ n, service, point, seatsLeft, onBack, onChoose }) {
           </div>
         ))}
       </div>
+      {BOARDING_NOTE && <p style={S.boardingNote}>⏱ {BOARDING_NOTE}</p>}
     </section>
   );
 }
@@ -786,7 +803,8 @@ function FormStep({
       <div style={S.summaryBox}>
         <div style={S.summaryEyebrow}>{service.label}</div>
         <div>
-          <strong>{run.vanName}</strong> · {service.pointRole}: {point.name}{" "}
+          <strong>{vanLabel(run.vanName, run.plate)}</strong> ·{" "}
+          {service.pointRole}: {point.name}{" "}
           <span style={S.summaryNote}>({point.note})</span>
         </div>
         <div style={S.summaryTrip}>
@@ -915,6 +933,10 @@ function DoneStep({ confirmation, onAgain }) {
           </strong>
         </div>
       </div>
+
+      {BOARDING_NOTE && (
+        <p style={{ ...S.boardingNote, textAlign: "center" }}>⏱ {BOARDING_NOTE}</p>
+      )}
 
       <button style={S.addBtn} onClick={onAgain}>
         Make another reservation

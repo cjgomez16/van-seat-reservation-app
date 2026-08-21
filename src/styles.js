@@ -337,6 +337,13 @@ export const S = {
 
   // manage-booking + admin
   noteText: { fontSize: 15, color: "#6b563d", lineHeight: 1.5, marginBottom: 16 },
+  boardingNote: {
+    fontSize: 14,
+    color: "#8a7150",
+    fontStyle: "italic",
+    lineHeight: 1.5,
+    margin: "14px 0 0",
+  },
   secondaryBtn: {
     background: "#fffdf8",
     color: ink,

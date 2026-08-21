@@ -10,6 +10,10 @@
   (`${vanId}-${tripId}`) never collide. Pickup/drop-off names are placeholders
   — replace them when confirmed. Keep this file in sync with the seed rows in
   supabase/migrations/*.sql (that's what the live database books against).
+
+  Each van has an optional `plate` (null for now). The organizer will provide
+  plate numbers before the event — fill them in here and they'll appear on the
+  van cards and confirmation tickets automatically (no other change needed).
 */
 
 export const SEATS_PER_RUN = 10;
@@ -22,6 +26,10 @@ export const MAX_PER_BOOKER = 10;
 export const COUPLE = "Candy Gamos & Jonas Vergara";
 export const VENUE = "Itogon Mountain Village (IMV)";
 export const EVENT_DATE = "October 1, 2026";
+
+// Shown under the trip times and on the confirmation. Set to null to hide.
+export const BOARDING_NOTE =
+  "Please be at your pickup point 10–15 minutes before departure.";
 
 export const SERVICES = [
   {
@@ -41,8 +49,8 @@ export const SERVICES = [
         name: "Pickup Point A",
         note: "Hotel Lobby",
         vans: [
-          { id: "v1", name: "Van 1" },
-          { id: "v2", name: "Van 2" },
+          { id: "v1", name: "Van 1", plate: null },
+          { id: "v2", name: "Van 2", plate: null },
         ],
       },
       {
@@ -50,8 +58,8 @@ export const SERVICES = [
         name: "Pickup Point B",
         note: "Church Courtyard",
         vans: [
-          { id: "v3", name: "Van 3" },
-          { id: "v4", name: "Van 4" },
+          { id: "v3", name: "Van 3", plate: null },
+          { id: "v4", name: "Van 4", plate: null },
         ],
       },
     ],
@@ -73,9 +81,9 @@ export const SERVICES = [
         name: "Drop-off Point",
         note: "To be announced",
         vans: [
-          { id: "a1", name: "Van 1" },
-          { id: "a2", name: "Van 2" },
-          { id: "a3", name: "Van 3" },
+          { id: "a1", name: "Van 1", plate: null },
+          { id: "a2", name: "Van 2", plate: null },
+          { id: "a3", name: "Van 3", plate: null },
         ],
       },
     ],
