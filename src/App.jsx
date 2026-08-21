@@ -933,9 +933,8 @@ function Footer() {
           : "Demo preview · bookings reset on refresh"}
       </p>
       <p style={S.colophon}>
-        Seats sorted, stress spared — brought to you by{" "}
-        <span style={S.colophonBrand}>SG Coordination</span>. Planning a
-        celebration of your own? Let's make it seamless —{" "}
+        <span style={S.colophonBrand}>SG Coordination</span> — every detail,
+        beautifully handled. Plan yours at{" "}
         <a
           className="colophon-link"
           href="https://sgcoordination.com"

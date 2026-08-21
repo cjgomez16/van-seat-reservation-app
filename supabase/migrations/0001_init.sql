@@ -48,14 +48,14 @@ create index if not exists bookings_run_id_idx on bookings(run_id);
 insert into van_runs
   (id, point_id, point_name, point_note, van_id, van_name, trip_id, trip_label, trip_time)
 values
-  ('v1-t1','A','Pickup Point A','Hotel Lobby','v1','Van 1','t1','First Trip','11:15 – 11:30 AM'),
-  ('v1-t2','A','Pickup Point A','Hotel Lobby','v1','Van 1','t2','Second Trip','12:15 – 12:30 PM'),
-  ('v2-t1','A','Pickup Point A','Hotel Lobby','v2','Van 2','t1','First Trip','11:15 – 11:30 AM'),
-  ('v2-t2','A','Pickup Point A','Hotel Lobby','v2','Van 2','t2','Second Trip','12:15 – 12:30 PM'),
-  ('v3-t1','B','Pickup Point B','Church Courtyard','v3','Van 3','t1','First Trip','11:15 – 11:30 AM'),
-  ('v3-t2','B','Pickup Point B','Church Courtyard','v3','Van 3','t2','Second Trip','12:15 – 12:30 PM'),
-  ('v4-t1','B','Pickup Point B','Church Courtyard','v4','Van 4','t1','First Trip','11:15 – 11:30 AM'),
-  ('v4-t2','B','Pickup Point B','Church Courtyard','v4','Van 4','t2','Second Trip','12:15 – 12:30 PM')
+  ('v1-t1','A','Pickup Point A','Hotel Lobby','v1','Van 1','t1','First Trip','11:30 AM'),
+  ('v1-t2','A','Pickup Point A','Hotel Lobby','v1','Van 1','t2','Second Trip','12:30 PM'),
+  ('v2-t1','A','Pickup Point A','Hotel Lobby','v2','Van 2','t1','First Trip','11:30 AM'),
+  ('v2-t2','A','Pickup Point A','Hotel Lobby','v2','Van 2','t2','Second Trip','12:30 PM'),
+  ('v3-t1','B','Pickup Point B','Church Courtyard','v3','Van 3','t1','First Trip','11:30 AM'),
+  ('v3-t2','B','Pickup Point B','Church Courtyard','v3','Van 3','t2','Second Trip','12:30 PM'),
+  ('v4-t1','B','Pickup Point B','Church Courtyard','v4','Van 4','t1','First Trip','11:30 AM'),
+  ('v4-t2','B','Pickup Point B','Church Courtyard','v4','Van 4','t2','Second Trip','12:30 PM')
 on conflict (id) do nothing;
 
 -- 4. Live seats-left view (aggregate counts only, no personal data) ----

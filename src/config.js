@@ -32,8 +32,8 @@ export const SERVICES = [
     pointRole: "Pickup", // label used on summaries/tickets
     pointStepLabel: "Choose your pickup point",
     trips: [
-      { id: "t1", label: "First Trip", time: "11:15 – 11:30 AM" },
-      { id: "t2", label: "Second Trip", time: "12:15 – 12:30 PM" },
+      { id: "t1", label: "First Trip", time: "11:30 AM" },
+      { id: "t2", label: "Second Trip", time: "12:30 PM" },
     ],
     points: [
       {
