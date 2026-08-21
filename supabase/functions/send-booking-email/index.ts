@@ -39,10 +39,14 @@ type Booking = {
 };
 
 Deno.serve(async (req) => {
-  // Authorize: the webhook must present the shared secret.
-  const auth = req.headers.get("authorization") ?? "";
-  const provided = auth.replace(/^Bearer\s+/i, "") || req.headers.get("x-webhook-secret") || "";
-  if (!WEBHOOK_SECRET || provided !== WEBHOOK_SECRET) {
+  // Authorize: the webhook must present the shared secret, in either the
+  // Authorization: Bearer header (deploy with JWT verification off) or an
+  // x-webhook-secret header (if you keep JWT verification on).
+  const bearer = (req.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
+  const headerSecret = (req.headers.get("x-webhook-secret") ?? "").trim();
+  const authorized =
+    !!WEBHOOK_SECRET && (bearer === WEBHOOK_SECRET || headerSecret === WEBHOOK_SECRET);
+  if (!authorized) {
     return new Response("Unauthorized", { status: 401 });
   }
 

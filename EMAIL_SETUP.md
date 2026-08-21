@@ -41,12 +41,19 @@ supabase secrets set RESEND_API_KEY=re_your_key_here
 supabase secrets set FROM_EMAIL="Candy & Jonas <events@sgcoordination.com>"
 supabase secrets set WEBHOOK_SECRET=choose-a-long-random-string
 
-# deploy
-supabase functions deploy send-booking-email
+# deploy WITH JWT verification off (the webhook authenticates via WEBHOOK_SECRET)
+supabase functions deploy send-booking-email --no-verify-jwt
 ```
 
-**Option B — Dashboard**: Edge Functions → Create → paste the file's contents →
+**Option B — Dashboard**: Edge Functions → Create → name it exactly
+`send-booking-email` → paste the file's contents → **turn OFF "Verify JWT"** →
 Deploy. Then Edge Functions → Secrets → add the three secrets above.
+
+> Why JWT off: Supabase otherwise requires a valid JWT in the `Authorization`
+> header, but the webhook sends the `WEBHOOK_SECRET` there. With JWT off, the
+> function's own secret check is what protects it. (If you'd rather keep JWT on,
+> send the secret in an `x-webhook-secret` header instead — the function accepts
+> either.)
 
 `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are provided automatically.
 
