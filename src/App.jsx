@@ -3,6 +3,8 @@ import {
   POINTS,
   TRIPS,
   EVENT_DATE,
+  COUPLE,
+  VENUE,
   SEATS_PER_RUN,
   runKey,
   findPoint,
@@ -509,13 +511,17 @@ function Header() {
   return (
     <header style={S.header}>
       <div style={S.sprig}>❧</div>
-      <p style={S.eyebrow}>With love &amp; gratitude</p>
+      <p style={S.eyebrow}>The wedding of</p>
+      <p style={S.coupleNames}>{COUPLE}</p>
+      <p style={S.eventMeta}>
+        {VENUE}
+        {EVENT_DATE ? ` · ${EVENT_DATE}` : ""}
+      </p>
       <h1 style={S.title}>Reserve Your Ride</h1>
       <p style={S.subtitle}>
         Kindly save your seat on one of our shuttle vans. Two pickup points, two
         departure times — choose what suits you best.
       </p>
-      {EVENT_DATE && <p style={S.headerDate}>{EVENT_DATE}</p>}
     </header>
   );
 }

@@ -7,9 +7,10 @@
   mirrors the Supabase `van_runs` catalogue in VAN-RESERVATION-HANDOFF.md.
 */
 
-// Set to a display string like "Saturday, June 14, 2026" to show a date
-// in the header + ticket. Leave null to keep the demo's date-less header.
-export const EVENT_DATE = null;
+// Wedding details shown in the header. Set EVENT_DATE to null to hide the date.
+export const COUPLE = "Candy Gamos & Jonas Vergara";
+export const VENUE = "Itogon Mountain Village (IMV)";
+export const EVENT_DATE = "October 1, 2026";
 
 export const SEATS_PER_RUN = 10;
 
