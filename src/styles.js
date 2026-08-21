@@ -8,6 +8,8 @@ export const GLOBAL_CSS = `
   .rustic-submit { transition: transform .12s ease, background .2s ease; }
   .rustic-submit:hover { transform: translateY(-1px); }
   input::placeholder { color: #b3a48f; }
+  .colophon-link { color: #a4562a; text-decoration: none; border-bottom: 1px solid rgba(164,86,42,.4); }
+  .colophon-link:hover { border-bottom-color: #a4562a; }
 
   /* Two-column grids that collapse to one column on narrow screens. */
   .rustic-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
@@ -412,4 +414,12 @@ export const S = {
   footer: { marginTop: 28, textAlign: "center" },
   footerRule: { height: 1, background: "#e6d8bf", margin: "0 auto 10px", maxWidth: 200 },
   footerText: { fontSize: 13, color: "#a99a83", fontStyle: "italic", margin: 0 },
+  colophon: {
+    fontSize: 13,
+    color: "#8a7150",
+    lineHeight: 1.6,
+    margin: "12px auto 0",
+    maxWidth: 400,
+  },
+  colophonBrand: { fontFamily: serif, fontWeight: 600, color: "#6b563d" },
 };
