@@ -27,6 +27,9 @@ const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const BOARDING_NOTE =
   "Please be at your pickup point 10–15 minutes before departure.";
 
+// Where "book again" points.
+const SITE_URL = "https://vanreservation.sgcoordination.com";
+
 const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
 
 type Booking = {
@@ -92,8 +95,8 @@ Deno.serve(async (req) => {
     bookerName: booking.booker_name,
   };
 
-  const { subject, lead } = messageFor(kind, details.serviceLabel);
-  const html = renderEmail({ ...details, lead, showBoarding: kind !== "DELETE" });
+  const { subject, lead, heading } = messageFor(kind, details.serviceLabel);
+  const html = renderEmail({ ...details, lead, heading, kind });
 
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
@@ -115,17 +118,20 @@ Deno.serve(async (req) => {
 function messageFor(kind: string, serviceLabel: string) {
   if (kind === "DELETE") {
     return {
+      heading: "Your ride has been cancelled",
       subject: "Your shuttle booking was cancelled",
-      lead: `Your booking for the ${serviceLabel.toLowerCase()} has been cancelled and the seats released. If this wasn't you, please book again or get in touch.`,
+      lead: `Your booking for the ${serviceLabel.toLowerCase()} has been cancelled and the seats released. If this wasn't you, you can book again below or get in touch.`,
     };
   }
   if (kind === "UPDATE") {
     return {
+      heading: "Reserve Your Ride",
       subject: "Your shuttle booking was updated",
       lead: `Here are the latest details for your ${serviceLabel.toLowerCase()} booking.`,
     };
   }
   return {
+    heading: "Reserve Your Ride",
     subject: "Your shuttle seat is reserved 🚐",
     lead: `You're all set! Here are the details for your ${serviceLabel.toLowerCase()} booking.`,
   };
@@ -142,8 +148,10 @@ function renderEmail(d: {
   passengers: string[];
   bookerName: string;
   lead: string;
-  showBoarding: boolean;
+  heading: string;
+  kind: string;
 }) {
+  const cancelled = d.kind === "DELETE";
   const row = (label: string, value: string) => `
     <tr>
       <td style="padding:7px 0;color:#8a7150;font-size:14px;">${label}</td>
@@ -154,7 +162,7 @@ function renderEmail(d: {
   <div style="background:#f1e7d5;padding:28px 16px;font-family:Georgia,'Times New Roman',serif;">
     <div style="max-width:520px;margin:0 auto;background:#fffdf8;border:1px solid #e0d0b5;border-radius:6px;padding:28px 26px;">
       <p style="margin:0 0 4px;color:#a4562a;font-style:italic;font-size:15px;">Candy &amp; Jonas · October 1, 2026</p>
-      <h1 style="margin:0 0 12px;color:#4a3723;font-size:26px;">Reserve Your Ride</h1>
+      <h1 style="margin:0 0 12px;color:#4a3723;font-size:26px;">${escapeHtml(d.heading)}</h1>
       <p style="margin:0 0 18px;color:#6b563d;font-size:15px;line-height:1.5;">${escapeHtml(d.lead)}</p>
 
       <div style="display:inline-block;background:#efe4d2;border:1px dashed #cbb794;border-radius:4px;padding:8px 14px;font-size:18px;letter-spacing:.08em;color:#4a3723;margin-bottom:16px;">
@@ -175,15 +183,19 @@ function renderEmail(d: {
       </table>
 
       ${
-        d.showBoarding
-          ? `<p style="margin:16px 0 0;color:#8a7150;font-style:italic;font-size:13px;">⏱ ${escapeHtml(
+        cancelled
+          ? ""
+          : `<p style="margin:16px 0 0;color:#8a7150;font-style:italic;font-size:13px;">⏱ ${escapeHtml(
               BOARDING_NOTE
             )}</p>`
-          : ""
       }
-      <p style="margin:16px 0 0;color:#8a7150;font-size:13px;">Keep your reference <b>${escapeHtml(
-        d.ref
-      )}</b> to edit or cancel your booking.</p>
+      ${
+        cancelled
+          ? `<a href="${SITE_URL}" style="display:inline-block;margin:18px 0 4px;background:#a4562a;color:#f7f1e6;text-decoration:none;padding:11px 20px;border-radius:4px;font-size:15px;">Book another ride →</a>`
+          : `<p style="margin:16px 0 0;color:#8a7150;font-size:13px;">Keep your reference <b>${escapeHtml(
+              d.ref
+            )}</b> to edit or cancel your booking.</p>`
+      }
 
       <hr style="border:none;border-top:1px solid #e6d8bf;margin:22px 0 12px;">
       <p style="margin:0;color:#a99a83;font-size:12px;">
