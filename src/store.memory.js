@@ -7,7 +7,7 @@
 */
 
 import { useState, useCallback, useMemo } from "react";
-import { SEATS_PER_RUN, MAX_PER_BOOKER, POINTS, TRIPS, runKey } from "./config.js";
+import { SEATS_PER_RUN, MAX_PER_BOOKER, ALL_RUNS } from "./config.js";
 
 function randomRef() {
   const s = Math.random().toString(36).toUpperCase().replace(/[^A-Z0-9]/g, "");
@@ -26,15 +26,13 @@ export function useMemoryBookings() {
 
   const seatsMap = useMemo(() => {
     const m = {};
-    for (const p of POINTS)
-      for (const v of p.vans)
-        for (const t of TRIPS) m[runKey(v.id, t.id)] = SEATS_PER_RUN;
+    for (const r of ALL_RUNS) m[r.runId] = SEATS_PER_RUN;
     for (const b of bookings) if (b.runId in m) m[b.runId] -= b.seats;
     return m;
   }, [bookings]);
 
   const seatsLeft = useCallback(
-    (vanId, tripId) => seatsMap[runKey(vanId, tripId)] ?? 0,
+    (vanId, tripId) => seatsMap[`${vanId}-${tripId}`] ?? 0,
     [seatsMap]
   );
 

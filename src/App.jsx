@@ -1,23 +1,31 @@
 import React, { useState, useMemo, useEffect } from "react";
 import {
-  POINTS,
-  TRIPS,
+  SERVICES,
+  ALL_RUNS,
+  SEATS_PER_RUN,
   EVENT_DATE,
   COUPLE,
   VENUE,
-  SEATS_PER_RUN,
   runKey,
-  findPoint,
   findTrip,
-  findVanPoint,
+  findRunContext,
 } from "./config.js";
 import { useBookings, BACKEND } from "./store.js";
 import { S, GLOBAL_CSS } from "./styles.js";
 
-const TOTAL_SEATS = POINTS.reduce(
-  (n, p) => n + p.vans.length * TRIPS.length * SEATS_PER_RUN,
-  0
-);
+const TOTAL_SEATS = ALL_RUNS.length * SEATS_PER_RUN;
+
+// Total seats left across every run of one service.
+function serviceSeatsLeft(service, seatsLeft) {
+  let n = 0;
+  for (const p of service.points)
+    for (const v of p.vans)
+      for (const t of service.trips) n += seatsLeft(v.id, t.id);
+  return n;
+}
+function serviceVanCount(service) {
+  return service.points.reduce((n, p) => n + p.vans.length, 0);
+}
 
 export default function App() {
   const store = useBookings();
@@ -40,11 +48,12 @@ export default function App() {
   );
 }
 
-/* ---------- Booking flow (pick point → van → form → done) ---------- */
+/* ---------- Booking flow (shuttle → [point] → van → form → done) ---------- */
 
 function BookFlow({ store }) {
-  const [step, setStep] = useState("point"); // point | van | form | done
-  const [selectedPoint, setSelectedPoint] = useState(null);
+  const [step, setStep] = useState("service"); // service | point | van | form | done
+  const [service, setService] = useState(null);
+  const [selectedPoint, setSelectedPoint] = useState(null); // point object
   const [selectedRun, setSelectedRun] = useState(null); // { vanId, vanName, tripId }
   const [names, setNames] = useState([""]);
   const [booker, setBooker] = useState({ name: "", phone: "", email: "" });
@@ -52,17 +61,35 @@ function BookFlow({ store }) {
   const [busy, setBusy] = useState(false);
   const [confirmation, setConfirmation] = useState(null);
 
-  const point = useMemo(() => findPoint(selectedPoint), [selectedPoint]);
   const filledNames = names.map((n) => n.trim()).filter(Boolean);
+  const multiPoint = service && service.points.length > 1;
 
   function resetToStart() {
-    setStep("point");
+    setStep("service");
+    setService(null);
     setSelectedPoint(null);
     setSelectedRun(null);
     setNames([""]);
     setBooker({ name: "", phone: "", email: "" });
     setError("");
     setConfirmation(null);
+  }
+
+  function chooseService(s) {
+    setService(s);
+    setError("");
+    if (s.points.length > 1) {
+      setSelectedPoint(null);
+      setStep("point");
+    } else {
+      setSelectedPoint(s.points[0]); // single drop-off → skip the point step
+      setStep("van");
+    }
+  }
+
+  function choosePoint(point) {
+    setSelectedPoint(point);
+    setStep("van");
   }
 
   function chooseRun(vanId, vanName, tripId) {
@@ -93,12 +120,14 @@ function BookFlow({ store }) {
 
     if (!res.ok) return setError(bookingErrorMessage(res));
 
-    const trip = findTrip(tripId);
+    const trip = findTrip(service, tripId);
     setConfirmation({
       ref: res.booking.ref,
+      serviceLabel: service.label,
+      pointRole: service.pointRole,
+      point: selectedPoint.name,
+      pointNote: selectedPoint.note,
       van: selectedRun.vanName,
-      point: point.name,
-      pointNote: point.note,
       trip: trip.label,
       time: trip.time,
       names: clean,
@@ -107,35 +136,58 @@ function BookFlow({ store }) {
     setStep("done");
   }
 
+  const nVan = multiPoint ? "3" : "2";
+  const nForm = multiPoint ? "4" : "3";
+
   return (
     <>
-      {step === "point" && (
-        <PointStep
+      {step === "service" && (
+        <ServiceStep
           loading={store.loading}
-          onPick={(id) => {
-            setSelectedPoint(id);
-            setStep("van");
-          }}
           seatsLeft={store.seatsLeft}
+          onPick={chooseService}
         />
       )}
 
-      {step === "van" && point && (
-        <VanStep
-          point={point}
+      {step === "point" && service && (
+        <PointStep
+          n="2"
+          service={service}
           seatsLeft={store.seatsLeft}
           onBack={() => {
-            setStep("point");
-            setSelectedPoint(null);
+            setStep("service");
+            setService(null);
+          }}
+          onPick={choosePoint}
+        />
+      )}
+
+      {step === "van" && service && selectedPoint && (
+        <VanStep
+          n={nVan}
+          service={service}
+          point={selectedPoint}
+          seatsLeft={store.seatsLeft}
+          onBack={() => {
+            if (multiPoint) {
+              setStep("point");
+              setSelectedPoint(null);
+            } else {
+              setStep("service");
+              setService(null);
+              setSelectedPoint(null);
+            }
           }}
           onChoose={chooseRun}
         />
       )}
 
-      {step === "form" && selectedRun && (
+      {step === "form" && service && selectedRun && (
         <FormStep
+          n={nForm}
           heading="Passenger details"
-          point={point}
+          service={service}
+          point={selectedPoint}
           run={selectedRun}
           names={names}
           setNames={setNames}
@@ -229,14 +281,12 @@ function ManageView({ store }) {
     setMessage("Your booking has been cancelled. The seats are now free again.");
   }
 
-  const vp = found ? findVanPoint(found.runId.split("-")[0]) : null;
-  const trip = found ? findTrip(found.runId.split("-")[1]) : null;
+  const ctx = found ? findRunContext(found.runId) : null;
   // When editing, the booking's own seats are still counted in seatsLeft,
   // so add them back to get the true room available for the edit.
-  const editSeatsLeft =
-    found && vp && trip
-      ? store.seatsLeft(vp.van.id, trip.id) + found.seats
-      : 0;
+  const editSeatsLeft = ctx
+    ? store.seatsLeft(ctx.van.id, ctx.trip.id) + found.seats
+    : 0;
 
   return (
     <section>
@@ -266,24 +316,28 @@ function ManageView({ store }) {
         </div>
       )}
 
-      {found && !editing && vp && trip && (
+      {found && !editing && ctx && (
         <>
           <div style={{ ...S.refPill, marginTop: 8 }}>{found.ref}</div>
           <div style={S.ticket}>
             <div style={S.ticketRow}>
-              <span>Van</span>
-              <strong>{vp.van.name}</strong>
+              <span>Shuttle</span>
+              <strong>{ctx.service.label}</strong>
             </div>
             <div style={S.ticketRow}>
-              <span>Pickup</span>
+              <span>{ctx.service.pointRole}</span>
               <strong>
-                {vp.point.name} ({vp.point.note})
+                {ctx.point.name} ({ctx.point.note})
               </strong>
+            </div>
+            <div style={S.ticketRow}>
+              <span>Van</span>
+              <strong>{ctx.van.name}</strong>
             </div>
             <div style={S.ticketRow}>
               <span>Departure</span>
               <strong>
-                {trip.label} · {trip.time}
+                {ctx.trip.label} · {ctx.trip.time}
               </strong>
             </div>
             <div style={S.ticketDivider} />
@@ -318,11 +372,13 @@ function ManageView({ store }) {
         </>
       )}
 
-      {found && editing && vp && trip && (
+      {found && editing && ctx && (
         <FormStep
+          n="✎"
           heading="Edit your booking"
-          point={vp.point}
-          run={{ vanId: vp.van.id, vanName: vp.van.name, tripId: trip.id }}
+          service={ctx.service}
+          point={ctx.point}
+          run={{ vanId: ctx.van.id, vanName: ctx.van.name, tripId: ctx.trip.id }}
           names={names}
           setNames={setNames}
           booker={booker}
@@ -366,7 +422,6 @@ function AdminView({ store }) {
     setRows(res.bookings);
   }
 
-  // Local (memory) backend: no passcode, load on mount + keep in sync.
   useEffect(() => {
     if (!needsPasscode) load("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -388,7 +443,7 @@ function AdminView({ store }) {
     <section>
       <StepLabel n="♦">Bookings</StepLabel>
       <p style={S.noteText}>
-        Organizer view of every booking.
+        Organizer view of every booking, both shuttles.
         {needsPasscode
           ? " Protected by a passcode so guest contact details aren't public."
           : " Local demo — resets on refresh."}
@@ -455,6 +510,7 @@ function AdminView({ store }) {
                   </span>
                 </div>
                 <div style={{ fontSize: 13, color: "#8a7150", marginTop: -6 }}>
+                  {r.service ? `${r.service.label} · ` : ""}
                   {r.point.name} — {r.point.note} · {r.trip.time}
                 </div>
                 {r.list.map((b) => (
@@ -485,24 +541,29 @@ function AdminView({ store }) {
   );
 }
 
-// Group a flat booking list into the run rows the admin panel renders.
+// Group a flat booking list into run rows, sorted by shuttle then van/trip.
 function groupByRun(list) {
   const map = new Map();
   for (const b of list) {
     if (!map.has(b.runId)) {
-      const vp = findVanPoint(b.runId.split("-")[0]);
-      const trip = findTrip(b.runId.split("-")[1]);
+      const ctx = findRunContext(b.runId);
       map.set(b.runId, {
         id: b.runId,
-        point: vp?.point ?? { name: "?", note: "" },
-        van: vp?.van ?? { name: "?" },
-        trip: trip ?? { label: "?", time: "" },
+        service: ctx?.service ?? null,
+        point: ctx?.point ?? { name: "?", note: "" },
+        van: ctx?.van ?? { name: "?" },
+        trip: ctx?.trip ?? { label: "?", time: "" },
         list: [],
       });
     }
     map.get(b.runId).list.push(b);
   }
-  return [...map.values()];
+  const order = SERVICES.map((s) => s.id);
+  return [...map.values()].sort((a, b) => {
+    const sa = order.indexOf(a.service?.id);
+    const sb = order.indexOf(b.service?.id);
+    return sa - sb || a.id.localeCompare(b.id);
+  });
 }
 
 /* ---------- Shared sub-components ---------- */
@@ -519,8 +580,8 @@ function Header() {
       </p>
       <h1 style={S.title}>Reserve Your Ride</h1>
       <p style={S.subtitle}>
-        Kindly save your seat on one of our shuttle vans. Two pickup points, two
-        departure times — choose what suits you best.
+        Kindly save your seat on our wedding shuttle vans — the ride to the
+        venue and the after-party ride out.
       </p>
     </header>
   );
@@ -556,22 +617,56 @@ function StepLabel({ n, children }) {
   );
 }
 
-function PointStep({ onPick, seatsLeft, loading }) {
+function ServiceStep({ onPick, seatsLeft, loading }) {
   return (
     <section>
-      <StepLabel n="1">Choose your pickup point</StepLabel>
+      <StepLabel n="1">Choose your shuttle</StepLabel>
       {loading && <p style={S.noteText}>Loading live seat counts…</p>}
       <div className="rustic-grid-2">
-        {POINTS.map((p) => {
+        {SERVICES.map((s) => {
+          const total = serviceSeatsLeft(s, seatsLeft);
+          return (
+            <button
+              key={s.id}
+              style={S.pointCard}
+              onClick={() => onPick(s)}
+              className="rustic-card"
+            >
+              <div style={S.serviceIcon}>{s.icon}</div>
+              <div style={S.pointName}>{s.label}</div>
+              <div style={S.pointNote}>{s.blurb}</div>
+              <div style={S.divider} />
+              <div style={S.pointMeta}>
+                {serviceVanCount(s)} vans · {total} seats available
+              </div>
+              <div style={S.chooseHint}>Select →</div>
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function PointStep({ n, service, seatsLeft, onBack, onPick }) {
+  return (
+    <section>
+      <button style={S.back} onClick={onBack}>
+        ← Change shuttle
+      </button>
+      <StepLabel n={n}>{service.pointStepLabel || "Choose your pickup point"}</StepLabel>
+      <div className="rustic-grid-2">
+        {service.points.map((p) => {
           const total = p.vans.reduce(
-            (sum, v) => sum + TRIPS.reduce((s, t) => s + seatsLeft(v.id, t.id), 0),
+            (sum, v) =>
+              sum + service.trips.reduce((s, t) => s + seatsLeft(v.id, t.id), 0),
             0
           );
           return (
             <button
               key={p.id}
               style={S.pointCard}
-              onClick={() => onPick(p.id)}
+              onClick={() => onPick(p)}
               className="rustic-card"
             >
               <div style={S.pointName}>{p.name}</div>
@@ -595,20 +690,24 @@ function seatTone(left) {
   return { bg: "#e4ead9", fg: "#4f6135", label: `${left} left` };
 }
 
-function VanStep({ point, seatsLeft, onBack, onChoose }) {
+function VanStep({ n, service, point, seatsLeft, onBack, onChoose }) {
+  const single = service.points.length === 1;
   return (
     <section>
       <button style={S.back} onClick={onBack}>
-        ← Change pickup point
+        ← Back
       </button>
-      <StepLabel n="2">Choose a van &amp; departure — {point.name}</StepLabel>
+      <StepLabel n={n}>
+        Choose a van &amp; departure{single ? "" : ` — ${point.name}`}
+      </StepLabel>
+      {single && <p style={{ ...S.noteText, marginTop: -6 }}>{service.blurb}</p>}
 
       <div style={S.vanList}>
         {point.vans.map((v) => (
           <div key={v.id} style={S.vanCard}>
             <div style={S.vanHead}>{v.name}</div>
             <div className="rustic-trip-row">
-              {TRIPS.map((t) => {
+              {service.trips.map((t) => {
                 const left = seatsLeft(v.id, t.id);
                 const tone = seatTone(left);
                 const full = left <= 0;
@@ -643,7 +742,9 @@ function VanStep({ point, seatsLeft, onBack, onChoose }) {
 }
 
 function FormStep({
+  n,
   heading,
+  service,
   point,
   run,
   names,
@@ -658,7 +759,7 @@ function FormStep({
   onSubmit,
   submitVerb,
 }) {
-  const trip = findTrip(run.tripId);
+  const trip = findTrip(service, run.tripId);
 
   function updateName(i, val) {
     const next = [...names];
@@ -680,11 +781,12 @@ function FormStep({
       <button style={S.back} onClick={onBack}>
         ← Back
       </button>
-      <StepLabel n="3">{heading}</StepLabel>
+      <StepLabel n={n}>{heading}</StepLabel>
 
       <div style={S.summaryBox}>
+        <div style={S.summaryEyebrow}>{service.label}</div>
         <div>
-          <strong>{run.vanName}</strong> · {point.name}{" "}
+          <strong>{run.vanName}</strong> · {service.pointRole}: {point.name}{" "}
           <span style={S.summaryNote}>({point.note})</span>
         </div>
         <div style={S.summaryTrip}>
@@ -720,12 +822,12 @@ function FormStep({
       />
 
       <label style={{ ...S.fieldLabel, marginTop: 18 }}>Passenger name(s)</label>
-      {names.map((n, i) => (
+      {names.map((nm, i) => (
         <div key={i} style={S.nameRow}>
           <input
             style={{ ...S.input, marginBottom: 0 }}
             placeholder={`Passenger ${i + 1}`}
-            value={n}
+            value={nm}
             onChange={(e) => updateName(i, e.target.value)}
           />
           {names.length > 1 && (
@@ -778,7 +880,11 @@ function DoneStep({ confirmation, onAgain }) {
 
       <div style={S.ticket}>
         <div style={S.ticketRow}>
-          <span>Pickup</span>
+          <span>Shuttle</span>
+          <strong>{confirmation.serviceLabel}</strong>
+        </div>
+        <div style={S.ticketRow}>
+          <span>{confirmation.pointRole}</span>
           <strong>{confirmation.point}</strong>
         </div>
         <div style={S.ticketRow}>
@@ -803,8 +909,8 @@ function DoneStep({ confirmation, onAgain }) {
         <div style={{ ...S.ticketRow, alignItems: "flex-start" }}>
           <span>Passengers</span>
           <strong style={{ textAlign: "right" }}>
-            {confirmation.names.map((n, i) => (
-              <div key={i}>{n}</div>
+            {confirmation.names.map((nm, i) => (
+              <div key={i}>{nm}</div>
             ))}
           </strong>
         </div>
@@ -848,6 +954,8 @@ function bookingErrorMessage(res) {
     return `You can book at most ${res.cap ?? "the run's"} seats per van.`;
   if (res.code === "NO_PASSENGERS")
     return "Please enter at least one passenger name.";
+  if (res.code === "RUN_NOT_FOUND")
+    return "This shuttle isn't available yet — please try another, or check back soon.";
   if (res.code === "NOT_FOUND")
     return "That booking could not be found — it may have been cancelled.";
   return "Something went wrong. Please try again.";
@@ -856,9 +964,10 @@ function bookingErrorMessage(res) {
 function exportCsv(bookings) {
   const header = [
     "reference",
+    "shuttle",
     "van",
-    "pickup_point",
-    "pickup_note",
+    "point",
+    "point_note",
     "trip",
     "trip_time",
     "booker_name",
@@ -869,15 +978,15 @@ function exportCsv(bookings) {
     "booked_at",
   ];
   const rows = bookings.map((b) => {
-    const vp = findVanPoint(b.runId.split("-")[0]);
-    const trip = findTrip(b.runId.split("-")[1]);
+    const ctx = findRunContext(b.runId);
     return [
       b.ref,
-      vp?.van.name ?? "",
-      vp?.point.name ?? "",
-      vp?.point.note ?? "",
-      trip?.label ?? "",
-      trip?.time ?? "",
+      ctx?.service?.label ?? "",
+      ctx?.van.name ?? "",
+      ctx?.point.name ?? "",
+      ctx?.point.note ?? "",
+      ctx?.trip.label ?? "",
+      ctx?.trip.time ?? "",
       b.bookerName,
       b.bookerPhone,
       b.bookerEmail ?? "",

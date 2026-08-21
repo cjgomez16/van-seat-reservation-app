@@ -39,6 +39,7 @@ function mapRpcError(error) {
     return { ok: false, code: "OVER_BOOKER_CAP", cap: m ? Number(m[1]) : undefined };
   }
   if (msg.includes("NO_PASSENGERS")) return { ok: false, code: "NO_PASSENGERS" };
+  if (msg.includes("RUN_NOT_FOUND")) return { ok: false, code: "RUN_NOT_FOUND" };
   if (msg.includes("NOT_FOUND")) return { ok: false, code: "NOT_FOUND" };
   if (msg.includes("FORBIDDEN")) return { ok: false, code: "FORBIDDEN" };
   return { ok: false, code: "ERROR", message: msg };
