@@ -561,7 +561,7 @@ function PointStep({ onPick, seatsLeft, loading }) {
     <section>
       <StepLabel n="1">Choose your pickup point</StepLabel>
       {loading && <p style={S.noteText}>Loading live seat counts…</p>}
-      <div style={S.cardGrid}>
+      <div className="rustic-grid-2">
         {POINTS.map((p) => {
           const total = p.vans.reduce(
             (sum, v) => sum + TRIPS.reduce((s, t) => s + seatsLeft(v.id, t.id), 0),
@@ -607,7 +607,7 @@ function VanStep({ point, seatsLeft, onBack, onChoose }) {
         {point.vans.map((v) => (
           <div key={v.id} style={S.vanCard}>
             <div style={S.vanHead}>{v.name}</div>
-            <div style={S.tripRow}>
+            <div className="rustic-trip-row">
               {TRIPS.map((t) => {
                 const left = seatsLeft(v.id, t.id);
                 const tone = seatTone(left);

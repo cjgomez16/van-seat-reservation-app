@@ -8,6 +8,13 @@ export const GLOBAL_CSS = `
   .rustic-submit { transition: transform .12s ease, background .2s ease; }
   .rustic-submit:hover { transform: translateY(-1px); }
   input::placeholder { color: #b3a48f; }
+
+  /* Two-column grids that collapse to one column on narrow screens. */
+  .rustic-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .rustic-trip-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 480px) {
+    .rustic-grid-2, .rustic-trip-row { grid-template-columns: 1fr; }
+  }
 `;
 
 const serif = "'Cormorant Garamond', Georgia, serif";
@@ -137,7 +144,6 @@ export const S = {
     flexShrink: 0,
   },
 
-  cardGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 },
   pointCard: {
     textAlign: "left",
     background: "#fffdf8",
@@ -173,7 +179,6 @@ export const S = {
     padding: "16px 16px 18px",
   },
   vanHead: { fontFamily: serif, fontSize: 22, fontWeight: 700, marginBottom: 12 },
-  tripRow: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 },
   tripBtn: {
     background: cream,
     border: "1px solid #e0d0b5",
