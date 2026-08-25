@@ -1,13 +1,12 @@
 /*
   IN-MEMORY STORE (fallback when Supabase env vars are absent).
   ------------------------------------------------------------------
-  Implements the same async, ref-keyed API as src/store.supabase.js so
-  App.jsx is identical against either backend. State lives in React
-  memory: everything resets on refresh and is NOT shared between users.
+  Same async API as src/store.supabase.js so App.jsx is identical against
+  either backend. State lives in React memory: resets on refresh, not shared.
 */
 
 import { useState, useCallback, useMemo } from "react";
-import { SEATS_PER_RUN, MAX_PER_BOOKER, ALL_RUNS } from "./config.js";
+import { MAX_PER_BOOKER, ALL_RUNS, runKey, runCapacity } from "./config.js";
 
 function randomRef() {
   const s = Math.random().toString(36).toUpperCase().replace(/[^A-Z0-9]/g, "");
@@ -26,14 +25,18 @@ export function useMemoryBookings() {
 
   const seatsMap = useMemo(() => {
     const m = {};
-    for (const r of ALL_RUNS) m[r.runId] = SEATS_PER_RUN;
+    for (const r of ALL_RUNS) m[r.runId] = r.capacity;
     for (const b of bookings) if (b.runId in m) m[b.runId] -= b.seats;
     return m;
   }, [bookings]);
 
-  const seatsLeft = useCallback(
-    (vanId, tripId) => seatsMap[`${vanId}-${tripId}`] ?? 0,
+  const seatsLeftByRun = useCallback(
+    (runId) => seatsMap[runId] ?? runCapacity(runId),
     [seatsMap]
+  );
+  const seatsLeft = useCallback(
+    (vanId, tripId) => seatsLeftByRun(runKey(vanId, tripId)),
+    [seatsLeftByRun]
   );
 
   const seatsTaken = useCallback(
@@ -45,12 +48,12 @@ export function useMemoryBookings() {
   );
 
   const createBooking = useCallback(
-    async ({ runId, bookerName, bookerPhone, bookerEmail, passengers }) => {
+    async ({ runId, bookerName, bookerPhone, bookerEmail, pickupLocation, passengers }) => {
       const seats = passengers.length;
       if (seats < 1) return { ok: false, code: "NO_PASSENGERS" };
       if (seats > MAX_PER_BOOKER)
         return { ok: false, code: "OVER_BOOKER_CAP", cap: MAX_PER_BOOKER };
-      const left = SEATS_PER_RUN - seatsTaken(runId);
+      const left = runCapacity(runId) - seatsTaken(runId);
       if (seats > left) return { ok: false, code: "NOT_ENOUGH_SEATS", left };
 
       const booking = {
@@ -60,6 +63,8 @@ export function useMemoryBookings() {
         bookerName,
         bookerPhone,
         bookerEmail: bookerEmail || "",
+        pickupLocation: pickupLocation || "",
+        assignedVan: null,
         passengers,
         seats,
         createdAt: new Date().toISOString(),
@@ -71,14 +76,14 @@ export function useMemoryBookings() {
   );
 
   const updateBooking = useCallback(
-    async (ref, { bookerName, bookerPhone, bookerEmail, passengers }) => {
+    async (ref, { bookerName, bookerPhone, bookerEmail, pickupLocation, passengers }) => {
       const existing = bookings.find((b) => b.ref === ref);
       if (!existing) return { ok: false, code: "NOT_FOUND" };
       const seats = passengers.length;
       if (seats < 1) return { ok: false, code: "NO_PASSENGERS" };
       if (seats > MAX_PER_BOOKER)
         return { ok: false, code: "OVER_BOOKER_CAP", cap: MAX_PER_BOOKER };
-      const left = SEATS_PER_RUN - seatsTaken(existing.runId, ref);
+      const left = runCapacity(existing.runId) - seatsTaken(existing.runId, ref);
       if (seats > left) return { ok: false, code: "NOT_ENOUGH_SEATS", left };
 
       const updated = {
@@ -86,6 +91,8 @@ export function useMemoryBookings() {
         bookerName,
         bookerPhone,
         bookerEmail: bookerEmail || "",
+        pickupLocation:
+          pickupLocation === undefined ? existing.pickupLocation : pickupLocation || "",
         passengers,
         seats,
       };
@@ -105,6 +112,18 @@ export function useMemoryBookings() {
     [bookings]
   );
 
+  // Head-driver van assignment (passcode ignored in the local demo).
+  const assignVan = useCallback(
+    async (ref, van) => {
+      const existing = bookings.find((b) => b.ref === ref);
+      if (!existing) return { ok: false, code: "NOT_FOUND" };
+      const updated = { ...existing, assignedVan: van || null };
+      setBookings((prev) => prev.map((b) => (b.ref === ref ? updated : b)));
+      return { ok: true, booking: updated };
+    },
+    [bookings]
+  );
+
   const findByRef = useCallback(
     async (ref) => {
       const norm = ref.trim().toUpperCase();
@@ -113,7 +132,6 @@ export function useMemoryBookings() {
     [bookings]
   );
 
-  // Passcode ignored for the local demo (no PII exposure risk in memory).
   const listBookings = useCallback(async () => ({ ok: true, bookings }), [bookings]);
 
   return {
@@ -121,9 +139,11 @@ export function useMemoryBookings() {
     loading: false,
     seatsMap,
     seatsLeft,
+    seatsLeftByRun,
     createBooking,
     updateBooking,
     cancelBooking,
+    assignVan,
     findByRef,
     listBookings,
   };

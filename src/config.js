@@ -1,25 +1,27 @@
 /*
   EVENT CONFIG — the only file you edit to change event details.
   ------------------------------------------------------------------
-  Two shuttle SERVICES, each with its own trips and points:
-    - "arrival"   : guests → the venue. 2 pickup points, 2 morning trips.
-    - "afterparty": the venue → a single drop-off. 3 vans, 2 evening trips.
+  Two shuttle SERVICES, each with a different booking MODEL:
 
-  A "point" is a pickup location (arrival) or a drop-off location (afterparty).
-  Van ids and trip ids are UNIQUE across services, so run ids
-  (`${vanId}-${tripId}`) never collide. Pickup/drop-off names are placeholders
-  — replace them when confirmed. Keep this file in sync with the seed rows in
-  supabase/migrations/*.sql (that's what the live database books against).
+    - "arrival"  (model: "slots") — guest picks a PICKUP TIME, then types
+      their own pickup location. No fixed points, no guest-facing van pick.
+      The head driver assigns each booking to a van afterward (admin panel).
+      Capacity is per time slot = vansPerSlot × SEATS_PER_RUN.
 
-  Each van has an optional `plate` (null for now). The organizer will provide
-  plate numbers before the event — fill them in here and they'll appear on the
-  van cards and confirmation tickets automatically (no other change needed).
+    - "afterparty" (model: "vans") — guest picks a VAN + evening trip to a
+      single drop-off point (unchanged).
+
+  Run ids are unique across services: arrival slots are "arr-115"/"arr-145";
+  after-party runs are "${vanId}-${tripId}" (a1-at1 …). Keep this file in sync
+  with the seed rows in supabase/migrations/*.sql (the live DB books against
+  van_runs, and the email reads labels from it).
+
+  Each van has an optional `plate` (null until provided).
 */
 
 export const SEATS_PER_RUN = 10;
 
-// Max seats one booker may reserve on a single van-run.
-// Currently 10 = the run capacity, so it imposes no extra limit.
+// Max seats one booker may reserve at once. 10 = a full van.
 export const MAX_PER_BOOKER = 10;
 
 // Wedding details shown in the header. Set EVENT_DATE to null to hide the date.
@@ -27,7 +29,7 @@ export const COUPLE = "Candy Gamos & Jonas Vergara";
 export const VENUE = "Itogon Mountain Village (IMV)";
 export const EVENT_DATE = "October 1, 2026";
 
-// Shown under the trip times and on the confirmation. Set to null to hide.
+// Shown under the times and on the confirmation. Set to null to hide.
 export const BOARDING_NOTE =
   "Please be at your pickup point 10–15 minutes before departure.";
 
@@ -35,33 +37,14 @@ export const SERVICES = [
   {
     id: "arrival",
     label: "Arrival to the venue",
-    blurb: "Shuttle from your pickup point to Itogon Mountain Village.",
+    blurb: "Shuttle to Itogon Mountain Village — we'll pick you up in town.",
     icon: "☀",
-    pointRole: "Pickup", // label used on summaries/tickets
-    pointStepLabel: "Choose your pickup point",
-    trips: [
-      { id: "t1", label: "First Trip", time: "11:30 AM" },
-      { id: "t2", label: "Second Trip", time: "12:30 PM" },
-    ],
-    points: [
-      {
-        id: "A",
-        name: "Pickup Point A",
-        note: "Hotel Lobby",
-        vans: [
-          { id: "v1", name: "Van 1", plate: null },
-          { id: "v2", name: "Van 2", plate: null },
-        ],
-      },
-      {
-        id: "B",
-        name: "Pickup Point B",
-        note: "Church Courtyard",
-        vans: [
-          { id: "v3", name: "Van 3", plate: null },
-          { id: "v4", name: "Van 4", plate: null },
-        ],
-      },
+    model: "slots",
+    locationRole: "Pickup", // label for the location on tickets/emails
+    vansPerSlot: 4, // head assigns Van 1..N; sets the per-slot seat cap
+    slots: [
+      { id: "arr-115", label: "First pickup", time: "1:15 PM" },
+      { id: "arr-145", label: "Second pickup", time: "1:45 PM" },
     ],
   },
   {
@@ -69,8 +52,8 @@ export const SERVICES = [
     label: "After-party departure",
     blurb: "Shuttle from Itogon Mountain Village to the drop-off point.",
     icon: "☾",
-    pointRole: "Drop-off",
-    pointStepLabel: null, // single drop-off → the point step is skipped
+    model: "vans",
+    locationRole: "Drop-off",
     trips: [
       { id: "at1", label: "First Trip", time: "10:00 PM" },
       { id: "at2", label: "Second Trip", time: "11:30 PM" },
@@ -99,32 +82,48 @@ export function getService(serviceId) {
   return SERVICES.find((s) => s.id === serviceId) || null;
 }
 
-export function findPoint(service, pointId) {
-  return service ? service.points.find((p) => p.id === pointId) || null : null;
-}
-
 export function findTrip(service, tripId) {
-  return service ? service.trips.find((t) => t.id === tripId) || null : null;
+  return service?.trips ? service.trips.find((t) => t.id === tripId) || null : null;
 }
 
-// Flattened catalogue of every van-run across both services.
-export const ALL_RUNS = SERVICES.flatMap((service) =>
-  service.points.flatMap((point) =>
+// Vans the head can assign for a slots-model service (Van 1..vansPerSlot).
+export function assignableVans(service) {
+  const n = service?.vansPerSlot || 0;
+  return Array.from({ length: n }, (_, i) => `Van ${i + 1}`);
+}
+
+// Flattened catalogue of every run across both services, with capacity.
+export const ALL_RUNS = SERVICES.flatMap((service) => {
+  if (service.model === "slots") {
+    const capacity = service.vansPerSlot * SEATS_PER_RUN;
+    return service.slots.map((slot) => ({
+      runId: slot.id,
+      capacity,
+      service,
+      slot,
+    }));
+  }
+  return service.points.flatMap((point) =>
     point.vans.flatMap((van) =>
       service.trips.map((trip) => ({
         runId: runKey(van.id, trip.id),
+        capacity: SEATS_PER_RUN,
         service,
         point,
         van,
         trip,
       }))
     )
-  )
-);
+  );
+});
 
 const RUN_BY_ID = new Map(ALL_RUNS.map((r) => [r.runId, r]));
 
-// runId -> { service, point, van, trip } for display (admin, manage, tickets).
+// runId -> { service, capacity, slot | (point, van, trip) } for display.
 export function findRunContext(runId) {
   return RUN_BY_ID.get(runId) || null;
+}
+
+export function runCapacity(runId) {
+  return RUN_BY_ID.get(runId)?.capacity ?? SEATS_PER_RUN;
 }

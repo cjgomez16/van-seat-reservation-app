@@ -1,16 +1,14 @@
 /*
-  SUPABASE STORE (used when VITE_SUPABASE_URL + ANON_KEY are set).
+  SUPABASE STORE (used when VITE_SUPABASE_URL + ANON/PUBLISHABLE key are set).
   ------------------------------------------------------------------
-  Same async, ref-keyed API as src/store.memory.js. All capacity
-  enforcement is server-side in the Postgres RPCs (see
-  supabase/migrations/0001_init.sql) — the client is never trusted to
-  do the seat math. Live seat counts come from the `seats_left` view
-  plus a realtime subscription on the `bookings` table.
+  Same async API as src/store.memory.js. All capacity enforcement is
+  server-side in the Postgres RPCs. Live seat counts come from the
+  `seats_left` view, refreshed by polling + on window focus.
 */
 
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "./supabaseClient.js";
-import { SEATS_PER_RUN, runKey } from "./config.js";
+import { runKey, runCapacity } from "./config.js";
 
 function rowToBooking(row) {
   if (!row) return null;
@@ -21,13 +19,14 @@ function rowToBooking(row) {
     bookerName: row.booker_name,
     bookerPhone: row.booker_phone,
     bookerEmail: row.booker_email || "",
+    pickupLocation: row.pickup_location || "",
+    assignedVan: row.assigned_van || null,
     passengers: row.passengers || [],
     seats: row.seats,
     createdAt: row.created_at,
   };
 }
 
-// Turn a Postgres RAISE message into the app's { ok:false, code, ... } shape.
 function mapRpcError(error) {
   const msg = error?.message || "";
   if (msg.includes("NOT_ENOUGH_SEATS")) {
@@ -65,12 +64,6 @@ export function useSupabaseBookings() {
       if (active) setLoading(false);
     })();
 
-    // Keep seat counts fresh across users. We poll the seats_left view
-    // (counts only) rather than subscribing to `bookings` over Realtime:
-    // RLS hides raw bookings from the anon key, so Realtime would deliver
-    // no events to anon clients anyway. Polling + refresh-on-focus is
-    // simpler and respects the same privacy model. Mutations also call
-    // refreshSeats() immediately, so the booker sees their own change now.
     const POLL_MS = 15000;
     const timer = setInterval(refreshSeats, POLL_MS);
     const onFocus = () => refreshSeats();
@@ -83,18 +76,23 @@ export function useSupabaseBookings() {
     };
   }, [refreshSeats]);
 
-  const seatsLeft = useCallback(
-    (vanId, tripId) => seatsMap[runKey(vanId, tripId)] ?? SEATS_PER_RUN,
+  const seatsLeftByRun = useCallback(
+    (runId) => seatsMap[runId] ?? runCapacity(runId),
     [seatsMap]
+  );
+  const seatsLeft = useCallback(
+    (vanId, tripId) => seatsLeftByRun(runKey(vanId, tripId)),
+    [seatsLeftByRun]
   );
 
   const createBooking = useCallback(
-    async ({ runId, bookerName, bookerPhone, bookerEmail, passengers }) => {
+    async ({ runId, bookerName, bookerPhone, bookerEmail, pickupLocation, passengers }) => {
       const { data, error } = await supabase.rpc("book_seats", {
         p_run_id: runId,
         p_booker_name: bookerName,
         p_booker_phone: bookerPhone,
         p_booker_email: bookerEmail || null,
+        p_pickup_location: pickupLocation || null,
         p_passengers: passengers,
       });
       if (error) return mapRpcError(error);
@@ -105,12 +103,13 @@ export function useSupabaseBookings() {
   );
 
   const updateBooking = useCallback(
-    async (ref, { bookerName, bookerPhone, bookerEmail, passengers }) => {
+    async (ref, { bookerName, bookerPhone, bookerEmail, pickupLocation, passengers }) => {
       const { data, error } = await supabase.rpc("update_booking", {
         p_ref: ref,
         p_booker_name: bookerName,
         p_booker_phone: bookerPhone,
         p_booker_email: bookerEmail || null,
+        p_pickup_location: pickupLocation ?? null,
         p_passengers: passengers,
       });
       if (error) return mapRpcError(error);
@@ -129,6 +128,16 @@ export function useSupabaseBookings() {
     },
     [refreshSeats]
   );
+
+  const assignVan = useCallback(async (ref, van, passcode) => {
+    const { data, error } = await supabase.rpc("assign_van", {
+      p_passcode: passcode,
+      p_ref: ref,
+      p_van: van || null,
+    });
+    if (error) return mapRpcError(error);
+    return { ok: true, booking: rowToBooking(data) };
+  }, []);
 
   const findByRef = useCallback(async (ref) => {
     const { data, error } = await supabase.rpc("find_booking", { p_ref: ref });
@@ -149,9 +158,11 @@ export function useSupabaseBookings() {
     loading,
     seatsMap,
     seatsLeft,
+    seatsLeftByRun,
     createBooking,
     updateBooking,
     cancelBooking,
+    assignVan,
     findByRef,
     listBookings,
   };

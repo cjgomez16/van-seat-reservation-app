@@ -2,7 +2,6 @@ import React, { useState, useMemo, useEffect } from "react";
 import {
   SERVICES,
   ALL_RUNS,
-  SEATS_PER_RUN,
   EVENT_DATE,
   COUPLE,
   VENUE,
@@ -10,27 +9,53 @@ import {
   runKey,
   findTrip,
   findRunContext,
+  assignableVans,
 } from "./config.js";
+import { useBookings, BACKEND } from "./store.js";
+import { S, GLOBAL_CSS } from "./styles.js";
+
+const TOTAL_SEATS = ALL_RUNS.reduce((n, r) => n + r.capacity, 0);
 
 // "Van 1" or "Van 1 · ABC 1234" when a plate is set.
 function vanLabel(name, plate) {
   return plate ? `${name} · ${plate}` : name;
 }
-import { useBookings, BACKEND } from "./store.js";
-import { S, GLOBAL_CSS } from "./styles.js";
 
-const TOTAL_SEATS = ALL_RUNS.length * SEATS_PER_RUN;
-
-// Total seats left across every run of one service.
-function serviceSeatsLeft(service, seatsLeft) {
+function serviceSeatsLeft(service, seatsLeftByRun) {
+  if (service.model === "slots")
+    return service.slots.reduce((n, s) => n + seatsLeftByRun(s.id), 0);
   let n = 0;
   for (const p of service.points)
     for (const v of p.vans)
-      for (const t of service.trips) n += seatsLeft(v.id, t.id);
+      for (const t of service.trips) n += seatsLeftByRun(runKey(v.id, t.id));
   return n;
 }
 function serviceVanCount(service) {
+  if (service.model === "slots") return service.vansPerSlot;
   return service.points.reduce((n, p) => n + p.vans.length, 0);
+}
+
+// Display fields for a booking's run (used in manage/admin tickets).
+function runDisplay(ctx, booking) {
+  const s = ctx.service;
+  if (ctx.slot) {
+    return {
+      serviceLabel: s.label,
+      locationRole: s.locationRole,
+      locationValue: booking?.pickupLocation || "—",
+      locationNote: "",
+      van: booking?.assignedVan || "To be assigned by your driver",
+      departure: `${ctx.slot.label} · ${ctx.slot.time}`,
+    };
+  }
+  return {
+    serviceLabel: s.label,
+    locationRole: s.locationRole,
+    locationValue: ctx.point.name,
+    locationNote: ctx.point.note,
+    van: vanLabel(ctx.van.name, ctx.van.plate),
+    departure: `${ctx.trip.label} · ${ctx.trip.time}`,
+  };
 }
 
 export default function App() {
@@ -54,21 +79,24 @@ export default function App() {
   );
 }
 
-/* ---------- Booking flow (shuttle → [point] → van → form → done) ---------- */
+/* ---------- Booking flow ---------- */
+// arrival: service → slot → form(+pickup location)
+// afterparty: service → van → form
 
 function BookFlow({ store }) {
-  const [step, setStep] = useState("service"); // service | point | van | form | done
+  const [step, setStep] = useState("service"); // service | slot | van | form | done
   const [service, setService] = useState(null);
-  const [selectedPoint, setSelectedPoint] = useState(null); // point object
-  const [selectedRun, setSelectedRun] = useState(null); // { vanId, vanName, tripId }
+  const [selectedPoint, setSelectedPoint] = useState(null); // afterparty
+  const [selectedRun, setSelectedRun] = useState(null);
   const [names, setNames] = useState([""]);
   const [booker, setBooker] = useState({ name: "", phone: "", email: "" });
+  const [pickupLocation, setPickupLocation] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [confirmation, setConfirmation] = useState(null);
 
   const filledNames = names.map((n) => n.trim()).filter(Boolean);
-  const multiPoint = service && service.points.length > 1;
+  const isArrival = service?.model === "slots";
 
   function resetToStart() {
     setStep("service");
@@ -77,6 +105,7 @@ function BookFlow({ store }) {
     setSelectedRun(null);
     setNames([""]);
     setBooker({ name: "", phone: "", email: "" });
+    setPickupLocation("");
     setError("");
     setConfirmation(null);
   }
@@ -84,27 +113,37 @@ function BookFlow({ store }) {
   function chooseService(s) {
     setService(s);
     setError("");
-    if (s.points.length > 1) {
-      setSelectedPoint(null);
-      setStep("point");
+    if (s.model === "slots") {
+      setStep("slot");
     } else {
-      setSelectedPoint(s.points[0]); // single drop-off → skip the point step
+      setSelectedPoint(s.points[0]); // single drop-off
       setStep("van");
     }
   }
 
-  function choosePoint(point) {
-    setSelectedPoint(point);
-    setStep("van");
+  function chooseSlot(slot) {
+    if (store.seatsLeftByRun(slot.id) <= 0) return;
+    setSelectedRun({
+      runId: slot.id,
+      kind: "slot",
+      slotLabel: slot.label,
+      time: slot.time,
+    });
+    setNames([""]);
+    setPickupLocation("");
+    setError("");
+    setStep("form");
   }
 
   function chooseRun(van, tripId) {
     if (store.seatsLeft(van.id, tripId) <= 0) return;
+    const trip = findTrip(service, tripId);
     setSelectedRun({
-      vanId: van.id,
+      runId: runKey(van.id, tripId),
+      kind: "van",
       vanName: van.name,
-      plate: van.plate ?? null,
-      tripId,
+      plate: van.plate,
+      trip,
     });
     setNames([""]);
     setError("");
@@ -113,81 +152,75 @@ function BookFlow({ store }) {
 
   async function submitBooking() {
     setError("");
-    const { vanId, tripId } = selectedRun;
     const clean = names.map((n) => n.trim()).filter(Boolean);
 
-    const err = validateBooking(booker, clean);
+    const err = validateBooking(booker, clean, {
+      requireLocation: isArrival,
+      pickupLocation,
+    });
     if (err) return setError(err);
 
     setBusy(true);
     const res = await store.createBooking({
-      runId: runKey(vanId, tripId),
+      runId: selectedRun.runId,
       bookerName: booker.name.trim(),
       bookerPhone: booker.phone.trim(),
       bookerEmail: booker.email.trim(),
+      pickupLocation: isArrival ? pickupLocation.trim() : null,
       passengers: clean,
     });
     setBusy(false);
-
     if (!res.ok) return setError(bookingErrorMessage(res));
 
-    const trip = findTrip(service, tripId);
     setConfirmation({
       ref: res.booking.ref,
       serviceLabel: service.label,
-      pointRole: service.pointRole,
-      point: selectedPoint.name,
-      pointNote: selectedPoint.note,
-      van: vanLabel(selectedRun.vanName, selectedRun.plate),
-      trip: trip.label,
-      time: trip.time,
+      locationRole: service.locationRole,
+      locationValue: isArrival ? pickupLocation.trim() : selectedPoint.name,
+      locationNote: isArrival ? "" : selectedPoint.note,
+      van: isArrival
+        ? "To be assigned by your driver"
+        : vanLabel(selectedRun.vanName, selectedRun.plate),
+      departure: isArrival
+        ? `${selectedRun.slotLabel} · ${selectedRun.time}`
+        : `${selectedRun.trip.label} · ${selectedRun.trip.time}`,
       names: clean,
       booker: { ...booker },
     });
     setStep("done");
   }
 
-  const nVan = multiPoint ? "3" : "2";
-  const nForm = multiPoint ? "4" : "3";
-
   return (
     <>
       {step === "service" && (
         <ServiceStep
           loading={store.loading}
-          seatsLeft={store.seatsLeft}
+          seatsLeftByRun={store.seatsLeftByRun}
           onPick={chooseService}
         />
       )}
 
-      {step === "point" && service && (
-        <PointStep
-          n="2"
+      {step === "slot" && service && (
+        <SlotStep
           service={service}
-          seatsLeft={store.seatsLeft}
+          seatsLeftByRun={store.seatsLeftByRun}
           onBack={() => {
             setStep("service");
             setService(null);
           }}
-          onPick={choosePoint}
+          onPick={chooseSlot}
         />
       )}
 
       {step === "van" && service && selectedPoint && (
         <VanStep
-          n={nVan}
           service={service}
           point={selectedPoint}
           seatsLeft={store.seatsLeft}
           onBack={() => {
-            if (multiPoint) {
-              setStep("point");
-              setSelectedPoint(null);
-            } else {
-              setStep("service");
-              setService(null);
-              setSelectedPoint(null);
-            }
+            setStep("service");
+            setService(null);
+            setSelectedPoint(null);
           }}
           onChoose={chooseRun}
         />
@@ -195,21 +228,23 @@ function BookFlow({ store }) {
 
       {step === "form" && service && selectedRun && (
         <FormStep
-          n={nForm}
           heading="Passenger details"
           service={service}
-          point={selectedPoint}
           run={selectedRun}
+          point={selectedPoint}
+          isArrival={isArrival}
           names={names}
           setNames={setNames}
           booker={booker}
           setBooker={setBooker}
-          seatsLeft={store.seatsLeft(selectedRun.vanId, selectedRun.tripId)}
+          pickupLocation={pickupLocation}
+          setPickupLocation={setPickupLocation}
+          seatsLeft={store.seatsLeftByRun(selectedRun.runId)}
           filledCount={filledNames.length}
           error={error}
           busy={busy}
           onBack={() => {
-            setStep("van");
+            setStep(isArrival ? "slot" : "van");
             setSelectedRun(null);
             setError("");
           }}
@@ -234,9 +269,14 @@ function ManageView({ store }) {
   const [editing, setEditing] = useState(false);
   const [names, setNames] = useState([""]);
   const [booker, setBooker] = useState({ name: "", phone: "", email: "" });
+  const [pickupLocation, setPickupLocation] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+
+  const ctx = found ? findRunContext(found.runId) : null;
+  const isArrival = ctx?.slot != null;
+  const disp = ctx ? runDisplay(ctx, found) : null;
 
   async function doLookup() {
     setMessage("");
@@ -256,13 +296,17 @@ function ManageView({ store }) {
       phone: found.bookerPhone,
       email: found.bookerEmail || "",
     });
+    setPickupLocation(found.pickupLocation || "");
     setEditing(true);
   }
 
   async function saveEdit() {
     setError("");
     const clean = names.map((n) => n.trim()).filter(Boolean);
-    const err = validateBooking(booker, clean);
+    const err = validateBooking(booker, clean, {
+      requireLocation: isArrival,
+      pickupLocation,
+    });
     if (err) return setError(err);
 
     setBusy(true);
@@ -270,6 +314,7 @@ function ManageView({ store }) {
       bookerName: booker.name.trim(),
       bookerPhone: booker.phone.trim(),
       bookerEmail: booker.email.trim(),
+      pickupLocation: isArrival ? pickupLocation.trim() : undefined,
       passengers: clean,
     });
     setBusy(false);
@@ -292,12 +337,8 @@ function ManageView({ store }) {
     setMessage("Your booking has been cancelled. The seats are now free again.");
   }
 
-  const ctx = found ? findRunContext(found.runId) : null;
-  // When editing, the booking's own seats are still counted in seatsLeft,
-  // so add them back to get the true room available for the edit.
-  const editSeatsLeft = ctx
-    ? store.seatsLeft(ctx.van.id, ctx.trip.id) + found.seats
-    : 0;
+  const editSeatsLeft =
+    ctx && found ? store.seatsLeftByRun(found.runId) + found.seats : 0;
 
   return (
     <section>
@@ -327,29 +368,28 @@ function ManageView({ store }) {
         </div>
       )}
 
-      {found && !editing && ctx && (
+      {found && !editing && disp && (
         <>
           <div style={{ ...S.refPill, marginTop: 8 }}>{found.ref}</div>
           <div style={S.ticket}>
             <div style={S.ticketRow}>
               <span>Shuttle</span>
-              <strong>{ctx.service.label}</strong>
+              <strong>{disp.serviceLabel}</strong>
             </div>
             <div style={S.ticketRow}>
-              <span>{ctx.service.pointRole}</span>
+              <span>{disp.locationRole}</span>
               <strong>
-                {ctx.point.name} ({ctx.point.note})
+                {disp.locationValue}
+                {disp.locationNote ? ` (${disp.locationNote})` : ""}
               </strong>
             </div>
             <div style={S.ticketRow}>
               <span>Van</span>
-              <strong>{vanLabel(ctx.van.name, ctx.van.plate)}</strong>
+              <strong>{disp.van}</strong>
             </div>
             <div style={S.ticketRow}>
               <span>Departure</span>
-              <strong>
-                {ctx.trip.label} · {ctx.trip.time}
-              </strong>
+              <strong>{disp.departure}</strong>
             </div>
             <div style={S.ticketDivider} />
             <div style={S.ticketRow}>
@@ -374,7 +414,7 @@ function ManageView({ store }) {
           </div>
           <div style={S.toolbar}>
             <button style={S.secondaryBtn} onClick={startEdit} disabled={busy}>
-              Edit passengers
+              Edit details
             </button>
             <button style={S.dangerBtn} onClick={cancel} disabled={busy}>
               Cancel booking
@@ -385,20 +425,26 @@ function ManageView({ store }) {
 
       {found && editing && ctx && (
         <FormStep
-          n="✎"
           heading="Edit your booking"
           service={ctx.service}
-          point={ctx.point}
-          run={{
-            vanId: ctx.van.id,
-            vanName: ctx.van.name,
-            plate: ctx.van.plate,
-            tripId: ctx.trip.id,
-          }}
+          run={
+            isArrival
+              ? { kind: "slot", slotLabel: ctx.slot.label, time: ctx.slot.time }
+              : {
+                  kind: "van",
+                  vanName: ctx.van.name,
+                  plate: ctx.van.plate,
+                  trip: ctx.trip,
+                }
+          }
+          point={isArrival ? null : ctx.point}
+          isArrival={isArrival}
           names={names}
           setNames={setNames}
           booker={booker}
           setBooker={setBooker}
+          pickupLocation={pickupLocation}
+          setPickupLocation={setPickupLocation}
           seatsLeft={editSeatsLeft}
           filledCount={names.map((n) => n.trim()).filter(Boolean).length}
           error={error}
@@ -412,12 +458,12 @@ function ManageView({ store }) {
   );
 }
 
-/* ---------- Admin (organizer view of every booking) ---------- */
+/* ---------- Admin (organizer + head-driver tooling) ---------- */
 
 function AdminView({ store }) {
   const needsPasscode = BACKEND === "supabase";
   const [passcode, setPasscode] = useState("");
-  const [rows, setRows] = useState(needsPasscode ? null : []); // null = not loaded
+  const [rows, setRows] = useState(needsPasscode ? null : []);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -444,10 +490,9 @@ function AdminView({ store }) {
   }, [needsPasscode, store]);
 
   const bookedSeats =
-    TOTAL_SEATS -
-    Object.values(store.seatsMap).reduce((s, left) => s + left, 0);
+    TOTAL_SEATS - Object.values(store.seatsMap).reduce((s, left) => s + left, 0);
 
-  const grouped = useMemo(() => groupByRun(rows || []), [rows]);
+  const sections = useMemo(() => groupForAdmin(rows || []), [rows]);
 
   async function cancelOne(ref) {
     if (!window.confirm(`Cancel ${ref}?`)) return;
@@ -455,13 +500,28 @@ function AdminView({ store }) {
     if (res.ok) load(needsPasscode ? passcode : "");
   }
 
+  async function assign(ref, van) {
+    const res = await store.assignVan(ref, van || null, needsPasscode ? passcode : "");
+    if (res.ok) {
+      setRows((prev) =>
+        prev.map((b) => (b.ref === ref ? { ...b, assignedVan: van || null } : b))
+      );
+    } else {
+      setError(
+        res.code === "FORBIDDEN"
+          ? "Passcode not accepted for van assignment."
+          : "Could not assign the van. Please try again."
+      );
+    }
+  }
+
   return (
     <section>
       <StepLabel n="♦">Bookings</StepLabel>
       <p style={S.noteText}>
-        Organizer view of every booking, both shuttles.
+        Organizer + head-driver view.
         {needsPasscode
-          ? " Protected by a passcode so guest contact details aren't public."
+          ? " Passcode-protected so guest details aren't public."
           : " Local demo — resets on refresh."}
       </p>
 
@@ -500,7 +560,7 @@ function AdminView({ store }) {
               onClick={() => exportCsv(rows)}
               disabled={rows.length === 0}
             >
-              Export CSV
+              Export run sheet (CSV)
             </button>
             <button
               style={S.secondaryBtn}
@@ -513,73 +573,160 @@ function AdminView({ store }) {
 
           {rows.length === 0 && <div style={S.emptyState}>No bookings yet.</div>}
 
-          {grouped.map((r) => {
-            const taken = r.list.reduce((n, b) => n + b.seats, 0);
-            return (
-              <div key={r.id} style={S.runGroup}>
-                <div style={S.runGroupHead}>
-                  <span>
-                    {vanLabel(r.van.name, r.van.plate)} · {r.trip.label}
-                  </span>
-                  <span style={{ fontSize: 14, color: "#a4562a" }}>
-                    {taken}/{SEATS_PER_RUN} seats
-                  </span>
-                </div>
-                <div style={{ fontSize: 13, color: "#8a7150", marginTop: -6 }}>
-                  {r.service ? `${r.service.label} · ` : ""}
-                  {r.point.name} — {r.point.note} · {r.trip.time}
-                </div>
-                {r.list.map((b) => (
-                  <div key={b.ref} style={S.bookingCard}>
-                    <div style={S.bookingHeadRow}>
-                      <div>
-                        <strong>{b.bookerName}</strong>{" "}
-                        <span style={{ color: "#a4562a" }}>({b.ref})</span>
-                        <div style={S.meta}>
-                          {b.bookerPhone}
-                          {b.bookerEmail ? ` · ${b.bookerEmail}` : ""} · {b.seats}{" "}
-                          seat{b.seats === 1 ? "" : "s"}
-                        </div>
-                        <div style={S.meta}>{b.passengers.join(", ")}</div>
-                      </div>
-                      <button style={S.dangerBtn} onClick={() => cancelOne(b.ref)}>
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            );
-          })}
+          {sections.map((sec) =>
+            sec.ctx?.slot ? (
+              <ArrivalSlotSection
+                key={sec.runId}
+                sec={sec}
+                onAssign={assign}
+                onCancel={cancelOne}
+              />
+            ) : (
+              <VanRunSection key={sec.runId} sec={sec} onCancel={cancelOne} />
+            )
+          )}
         </>
       )}
     </section>
   );
 }
 
-// Group a flat booking list into run rows, sorted by shuttle then van/trip.
-function groupByRun(list) {
+// Arrival slot: pickup locations + per-van assignment.
+function ArrivalSlotSection({ sec, onAssign, onCancel }) {
+  const { service, slot, capacity } = sec.ctx;
+  const vans = assignableVans(service);
+  const list = [...sec.list].sort((a, b) =>
+    (a.pickupLocation || "").localeCompare(b.pickupLocation || "")
+  );
+  const taken = sec.list.reduce((n, b) => n + b.seats, 0);
+  const tally = {};
+  for (const v of vans) tally[v] = 0;
+  let unassigned = 0;
+  for (const b of sec.list) {
+    if (b.assignedVan && b.assignedVan in tally) tally[b.assignedVan] += b.seats;
+    else unassigned += b.seats;
+  }
+
+  return (
+    <div style={S.runGroup}>
+      <div style={S.runGroupHead}>
+        <span>
+          {slot.label} · {slot.time}
+        </span>
+        <span style={{ fontSize: 14, color: "#a4562a" }}>
+          {taken}/{capacity} seats
+        </span>
+      </div>
+      <div style={{ fontSize: 13, color: "#8a7150", marginTop: -6, marginBottom: 8 }}>
+        {service.label} · assign each group to a van
+      </div>
+
+      <div style={S.tallyRow}>
+        {vans.map((v) => (
+          <span
+            key={v}
+            style={{
+              ...S.tallyChip,
+              ...(tally[v] > 10 ? S.tallyChipOver : null),
+            }}
+          >
+            {v}: {tally[v]}/10
+          </span>
+        ))}
+        {unassigned > 0 && (
+          <span style={{ ...S.tallyChip, ...S.tallyChipUnassigned }}>
+            Unassigned: {unassigned}
+          </span>
+        )}
+      </div>
+
+      {list.map((b) => (
+        <div key={b.ref} style={S.bookingCard}>
+          <div style={S.bookingHeadRow}>
+            <div>
+              <strong>📍 {b.pickupLocation || "(no location given)"}</strong>
+              <div style={S.meta}>
+                {b.bookerName} · {b.bookerPhone} · {b.seats} seat
+                {b.seats === 1 ? "" : "s"}{" "}
+                <span style={{ color: "#a4562a" }}>({b.ref})</span>
+              </div>
+              <div style={S.meta}>{b.passengers.join(", ")}</div>
+              <div style={{ marginTop: 6 }}>
+                <select
+                  style={S.assignSelect}
+                  value={b.assignedVan || ""}
+                  onChange={(e) => onAssign(b.ref, e.target.value)}
+                >
+                  <option value="">— Assign van —</option>
+                  {vans.map((v) => (
+                    <option key={v} value={v}>
+                      {v}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <button style={S.dangerBtn} onClick={() => onCancel(b.ref)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// After-party van-run: unchanged listing.
+function VanRunSection({ sec, onCancel }) {
+  const { service, point, van, trip } = sec.ctx;
+  const taken = sec.list.reduce((n, b) => n + b.seats, 0);
+  return (
+    <div style={S.runGroup}>
+      <div style={S.runGroupHead}>
+        <span>
+          {vanLabel(van.name, van.plate)} · {trip.label}
+        </span>
+        <span style={{ fontSize: 14, color: "#a4562a" }}>{taken}/10 seats</span>
+      </div>
+      <div style={{ fontSize: 13, color: "#8a7150", marginTop: -6 }}>
+        {service.label} · {point.name} — {point.note} · {trip.time}
+      </div>
+      {sec.list.map((b) => (
+        <div key={b.ref} style={S.bookingCard}>
+          <div style={S.bookingHeadRow}>
+            <div>
+              <strong>{b.bookerName}</strong>{" "}
+              <span style={{ color: "#a4562a" }}>({b.ref})</span>
+              <div style={S.meta}>
+                {b.bookerPhone}
+                {b.bookerEmail ? ` · ${b.bookerEmail}` : ""} · {b.seats} seat
+                {b.seats === 1 ? "" : "s"}
+              </div>
+              <div style={S.meta}>{b.passengers.join(", ")}</div>
+            </div>
+            <button style={S.dangerBtn} onClick={() => onCancel(b.ref)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Group bookings into ordered sections (arrival slots first, then van-runs).
+function groupForAdmin(rows) {
   const map = new Map();
-  for (const b of list) {
+  for (const b of rows) {
     if (!map.has(b.runId)) {
-      const ctx = findRunContext(b.runId);
-      map.set(b.runId, {
-        id: b.runId,
-        service: ctx?.service ?? null,
-        point: ctx?.point ?? { name: "?", note: "" },
-        van: ctx?.van ?? { name: "?" },
-        trip: ctx?.trip ?? { label: "?", time: "" },
-        list: [],
-      });
+      map.set(b.runId, { runId: b.runId, ctx: findRunContext(b.runId), list: [] });
     }
     map.get(b.runId).list.push(b);
   }
-  const order = SERVICES.map((s) => s.id);
-  return [...map.values()].sort((a, b) => {
-    const sa = order.indexOf(a.service?.id);
-    const sb = order.indexOf(b.service?.id);
-    return sa - sb || a.id.localeCompare(b.id);
-  });
+  const order = ALL_RUNS.map((r) => r.runId);
+  return [...map.values()].sort(
+    (a, b) => order.indexOf(a.runId) - order.indexOf(b.runId)
+  );
 }
 
 /* ---------- Shared sub-components ---------- */
@@ -633,14 +780,18 @@ function StepLabel({ n, children }) {
   );
 }
 
-function ServiceStep({ onPick, seatsLeft, loading }) {
+function ServiceStep({ onPick, seatsLeftByRun, loading }) {
   return (
     <section>
       <StepLabel n="1">Choose your shuttle</StepLabel>
       {loading && <p style={S.noteText}>Loading live seat counts…</p>}
       <div className="rustic-grid-2">
         {SERVICES.map((s) => {
-          const total = serviceSeatsLeft(s, seatsLeft);
+          const total = serviceSeatsLeft(s, seatsLeftByRun);
+          const meta =
+            s.model === "slots"
+              ? `${s.slots.length} pickup times · ${total} seats available`
+              : `${serviceVanCount(s)} vans · ${total} seats available`;
           return (
             <button
               key={s.id}
@@ -652,45 +803,7 @@ function ServiceStep({ onPick, seatsLeft, loading }) {
               <div style={S.pointName}>{s.label}</div>
               <div style={S.pointNote}>{s.blurb}</div>
               <div style={S.divider} />
-              <div style={S.pointMeta}>
-                {serviceVanCount(s)} vans · {total} seats available
-              </div>
-              <div style={S.chooseHint}>Select →</div>
-            </button>
-          );
-        })}
-      </div>
-    </section>
-  );
-}
-
-function PointStep({ n, service, seatsLeft, onBack, onPick }) {
-  return (
-    <section>
-      <button style={S.back} onClick={onBack}>
-        ← Change shuttle
-      </button>
-      <StepLabel n={n}>{service.pointStepLabel || "Choose your pickup point"}</StepLabel>
-      <div className="rustic-grid-2">
-        {service.points.map((p) => {
-          const total = p.vans.reduce(
-            (sum, v) =>
-              sum + service.trips.reduce((s, t) => s + seatsLeft(v.id, t.id), 0),
-            0
-          );
-          return (
-            <button
-              key={p.id}
-              style={S.pointCard}
-              onClick={() => onPick(p)}
-              className="rustic-card"
-            >
-              <div style={S.pointName}>{p.name}</div>
-              <div style={S.pointNote}>{p.note}</div>
-              <div style={S.divider} />
-              <div style={S.pointMeta}>
-                {p.vans.length} vans · {total} seats available
-              </div>
+              <div style={S.pointMeta}>{meta}</div>
               <div style={S.chooseHint}>Select →</div>
             </button>
           );
@@ -702,21 +815,62 @@ function PointStep({ n, service, seatsLeft, onBack, onPick }) {
 
 function seatTone(left) {
   if (left <= 0) return { bg: "#e7ddd0", fg: "#8a7d6b", label: "Full" };
-  if (left <= 3) return { bg: "#f3e2cf", fg: "#a4562a", label: `${left} left` };
+  if (left <= 5) return { bg: "#f3e2cf", fg: "#a4562a", label: `${left} left` };
   return { bg: "#e4ead9", fg: "#4f6135", label: `${left} left` };
 }
 
-function VanStep({ n, service, point, seatsLeft, onBack, onChoose }) {
-  const single = service.points.length === 1;
+function SlotStep({ service, seatsLeftByRun, onBack, onPick }) {
   return (
     <section>
       <button style={S.back} onClick={onBack}>
-        ← Back
+        ← Change shuttle
       </button>
-      <StepLabel n={n}>
-        Choose a van &amp; departure{single ? "" : ` — ${point.name}`}
-      </StepLabel>
-      {single && <p style={{ ...S.noteText, marginTop: -6 }}>{service.blurb}</p>}
+      <StepLabel n="2">Choose your pickup time</StepLabel>
+      <div className="rustic-grid-2">
+        {service.slots.map((slot) => {
+          const left = seatsLeftByRun(slot.id);
+          const tone = seatTone(left);
+          const full = left <= 0;
+          return (
+            <button
+              key={slot.id}
+              disabled={full}
+              onClick={() => onPick(slot)}
+              className={full ? "" : "rustic-card"}
+              style={{
+                ...S.pointCard,
+                opacity: full ? 0.55 : 1,
+                cursor: full ? "not-allowed" : "pointer",
+              }}
+            >
+              <div style={S.pointName}>{slot.label}</div>
+              <div style={S.pointNote}>{slot.time}</div>
+              <div style={S.divider} />
+              <div style={S.pointMeta}>
+                <span
+                  style={{ ...S.seatBadge, background: tone.bg, color: tone.fg }}
+                >
+                  {tone.label}
+                </span>
+              </div>
+              {!full && <div style={S.chooseHint}>Select →</div>}
+            </button>
+          );
+        })}
+      </div>
+      {BOARDING_NOTE && <p style={S.boardingNote}>⏱ {BOARDING_NOTE}</p>}
+    </section>
+  );
+}
+
+function VanStep({ service, point, seatsLeft, onBack, onChoose }) {
+  return (
+    <section>
+      <button style={S.back} onClick={onBack}>
+        ← Change shuttle
+      </button>
+      <StepLabel n="2">Choose a van &amp; departure</StepLabel>
+      <p style={{ ...S.noteText, marginTop: -6 }}>{service.blurb}</p>
 
       <div style={S.vanList}>
         {point.vans.map((v) => (
@@ -753,21 +907,22 @@ function VanStep({ n, service, point, seatsLeft, onBack, onChoose }) {
           </div>
         ))}
       </div>
-      {BOARDING_NOTE && <p style={S.boardingNote}>⏱ {BOARDING_NOTE}</p>}
     </section>
   );
 }
 
 function FormStep({
-  n,
   heading,
   service,
-  point,
   run,
+  point,
+  isArrival,
   names,
   setNames,
   booker,
   setBooker,
+  pickupLocation,
+  setPickupLocation,
   seatsLeft,
   filledCount,
   error,
@@ -776,8 +931,6 @@ function FormStep({
   onSubmit,
   submitVerb,
 }) {
-  const trip = findTrip(service, run.tripId);
-
   function updateName(i, val) {
     const next = [...names];
     next[i] = val;
@@ -798,18 +951,31 @@ function FormStep({
       <button style={S.back} onClick={onBack}>
         ← Back
       </button>
-      <StepLabel n={n}>{heading}</StepLabel>
+      <StepLabel n="3">{heading}</StepLabel>
 
       <div style={S.summaryBox}>
         <div style={S.summaryEyebrow}>{service.label}</div>
-        <div>
-          <strong>{vanLabel(run.vanName, run.plate)}</strong> ·{" "}
-          {service.pointRole}: {point.name}{" "}
-          <span style={S.summaryNote}>({point.note})</span>
-        </div>
-        <div style={S.summaryTrip}>
-          {trip.label} — {trip.time}
-        </div>
+        {isArrival ? (
+          <>
+            <div>
+              <strong>{run.slotLabel}</strong> — {run.time}
+            </div>
+            <div style={S.summaryTrip}>
+              We'll pick you up at the location you enter below.
+            </div>
+          </>
+        ) : (
+          <>
+            <div>
+              <strong>{vanLabel(run.vanName, run.plate)}</strong> ·{" "}
+              {service.locationRole}: {point.name}{" "}
+              <span style={S.summaryNote}>({point.note})</span>
+            </div>
+            <div style={S.summaryTrip}>
+              {run.trip.label} — {run.trip.time}
+            </div>
+          </>
+        )}
         <div style={S.summarySeats}>
           {seatsLeft} seat{seatsLeft === 1 ? "" : "s"} available · booking{" "}
           {filledCount || 0}
@@ -838,6 +1004,23 @@ function FormStep({
         value={booker.email}
         onChange={(e) => setBooker({ ...booker, email: e.target.value })}
       />
+
+      {isArrival && (
+        <>
+          <label style={S.fieldLabel}>
+            Pickup location{" "}
+            <span style={{ color: "#a4562a", fontStyle: "normal" }}>
+              (where should we get you?)
+            </span>
+          </label>
+          <input
+            style={S.input}
+            placeholder="Hotel, address, or landmark in town"
+            value={pickupLocation}
+            onChange={(e) => setPickupLocation(e.target.value)}
+          />
+        </>
+      )}
 
       <label style={{ ...S.fieldLabel, marginTop: 18 }}>Passenger name(s)</label>
       {names.map((nm, i) => (
@@ -902,22 +1085,22 @@ function DoneStep({ confirmation, onAgain }) {
           <strong>{confirmation.serviceLabel}</strong>
         </div>
         <div style={S.ticketRow}>
-          <span>{confirmation.pointRole}</span>
-          <strong>{confirmation.point}</strong>
+          <span>{confirmation.locationRole}</span>
+          <strong>{confirmation.locationValue}</strong>
         </div>
-        <div style={S.ticketRow}>
-          <span>Where</span>
-          <strong>{confirmation.pointNote}</strong>
-        </div>
+        {confirmation.locationNote && (
+          <div style={S.ticketRow}>
+            <span>Where</span>
+            <strong>{confirmation.locationNote}</strong>
+          </div>
+        )}
         <div style={S.ticketRow}>
           <span>Van</span>
           <strong>{confirmation.van}</strong>
         </div>
         <div style={S.ticketRow}>
           <span>Departure</span>
-          <strong>
-            {confirmation.trip} · {confirmation.time}
-          </strong>
+          <strong>{confirmation.departure}</strong>
         </div>
         <div style={S.ticketDivider} />
         <div style={S.ticketRow}>
@@ -972,20 +1155,22 @@ function Footer() {
 
 /* ---------- Shared validation + helpers ---------- */
 
-function validateBooking(booker, cleanNames) {
+function validateBooking(booker, cleanNames, { requireLocation, pickupLocation } = {}) {
   if (!booker.name.trim()) return "Please enter the booker's name.";
   if (!booker.phone.trim()) return "Please enter a contact number.";
   if (booker.email.trim() && !booker.email.includes("@"))
     return "That email doesn't look right — please check it.";
+  if (requireLocation && !(pickupLocation || "").trim())
+    return "Please enter your pickup location.";
   if (cleanNames.length === 0) return "Please enter at least one passenger name.";
   return null;
 }
 
 function bookingErrorMessage(res) {
   if (res.code === "NOT_ENOUGH_SEATS")
-    return `Only ${res.left} seat${res.left === 1 ? "" : "s"} left on this run — please remove a name or pick another van.`;
+    return `Only ${res.left} seat${res.left === 1 ? "" : "s"} left — please remove a name or pick another time.`;
   if (res.code === "OVER_BOOKER_CAP")
-    return `You can book at most ${res.cap ?? "the run's"} seats per van.`;
+    return `You can book at most ${res.cap ?? "a van's worth of"} seats at once.`;
   if (res.code === "NO_PASSENGERS")
     return "Please enter at least one passenger name.";
   if (res.code === "RUN_NOT_FOUND")
@@ -999,11 +1184,9 @@ function exportCsv(bookings) {
   const header = [
     "reference",
     "shuttle",
-    "van",
-    "point",
-    "point_note",
-    "trip",
-    "trip_time",
+    "when",
+    "pickup_or_dropoff",
+    "assigned_van",
     "booker_name",
     "booker_phone",
     "booker_email",
@@ -1013,14 +1196,18 @@ function exportCsv(bookings) {
   ];
   const rows = bookings.map((b) => {
     const ctx = findRunContext(b.runId);
+    const when = ctx?.slot
+      ? `${ctx.slot.label} ${ctx.slot.time}`
+      : ctx
+        ? `${ctx.trip.label} ${ctx.trip.time}`
+        : "";
+    const loc = ctx?.slot ? b.pickupLocation : ctx?.point?.name ?? "";
     return [
       b.ref,
       ctx?.service?.label ?? "",
-      ctx?.van.name ?? "",
-      ctx?.point.name ?? "",
-      ctx?.point.note ?? "",
-      ctx?.trip.label ?? "",
-      ctx?.trip.time ?? "",
+      when,
+      loc,
+      b.assignedVan ?? "",
       b.bookerName,
       b.bookerPhone,
       b.bookerEmail ?? "",

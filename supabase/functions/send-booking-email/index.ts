@@ -37,6 +37,8 @@ type Booking = {
   run_id: string;
   booker_name: string;
   booker_email: string | null;
+  pickup_location: string | null;
+  assigned_van: string | null;
   passengers: string[];
   seats: number;
 };
@@ -79,17 +81,21 @@ Deno.serve(async (req) => {
     .eq("id", booking.run_id)
     .single();
 
-  const isAfterparty = booking.run_id.startsWith("a");
-  const serviceLabel = isAfterparty ? "After-party departure" : "Arrival to the venue";
-  const pointRole = isAfterparty ? "Drop-off" : "Pickup";
+  // Arrival slot runs are ids like "arr-115"; after-party are "a1-at1".
+  const isArrival = booking.run_id.startsWith("arr");
+  const serviceLabel = isArrival ? "Arrival to the venue" : "After-party departure";
+  const pointRole = isArrival ? "Pickup" : "Drop-off";
 
   const details = {
     ref: booking.ref,
     serviceLabel,
     pointRole,
-    point: run?.point_name ?? "",
-    pointNote: run?.point_note ?? "",
-    van: run?.van_name ?? "",
+    // Arrival: the guest's typed pickup location + head-assigned van.
+    point: isArrival ? (booking.pickup_location ?? "") : (run?.point_name ?? ""),
+    pointNote: isArrival ? "" : (run?.point_note ?? ""),
+    van: isArrival
+      ? (booking.assigned_van || "To be assigned by your driver")
+      : (run?.van_name ?? ""),
     departure: run ? `${run.trip_label} · ${run.trip_time}` : "",
     passengers: booking.passengers ?? [],
     bookerName: booking.booker_name,
