@@ -6,8 +6,6 @@ import {
   COUPLE,
   VENUE,
   BOARDING_NOTE,
-  runKey,
-  findTrip,
   findRunContext,
   assignableVans,
 } from "./config.js";
@@ -24,18 +22,10 @@ function vanLabel(name, plate) {
 function serviceSeatsLeft(service, seatsLeftByRun) {
   if (service.model === "slots")
     return service.slots.reduce((n, s) => n + seatsLeftByRun(s.id), 0);
-  let n = 0;
-  for (const p of service.points)
-    for (const v of p.vans)
-      for (const t of service.trips) n += seatsLeftByRun(runKey(v.id, t.id));
-  return n;
-}
-function serviceVanCount(service) {
-  if (service.model === "slots") return service.vansPerSlot;
-  return service.points.reduce((n, p) => n + p.vans.length, 0);
+  return service.departures.reduce((n, d) => n + seatsLeftByRun(d.id), 0);
 }
 
-// Display fields for a booking's run (used in manage/admin tickets).
+// Display fields for a booking's run (used in tickets / manage / admin).
 function runDisplay(ctx, booking) {
   const s = ctx.service;
   if (ctx.slot) {
@@ -54,7 +44,7 @@ function runDisplay(ctx, booking) {
     locationValue: ctx.point.name,
     locationNote: ctx.point.note,
     van: vanLabel(ctx.van.name, ctx.van.plate),
-    departure: `${ctx.trip.label} · ${ctx.trip.time}`,
+    departure: ctx.departure.time,
   };
 }
 
@@ -80,13 +70,12 @@ export default function App() {
 }
 
 /* ---------- Booking flow ---------- */
-// arrival: service → slot → form(+pickup location)
-// afterparty: service → van → form
+// arrival (slots):   service → pick time → form (+ pickup location)
+// afterparty (list): service → pick departure time → form
 
 function BookFlow({ store }) {
-  const [step, setStep] = useState("service"); // service | slot | van | form | done
+  const [step, setStep] = useState("service"); // service | slot | departure | form | done
   const [service, setService] = useState(null);
-  const [selectedPoint, setSelectedPoint] = useState(null); // afterparty
   const [selectedRun, setSelectedRun] = useState(null);
   const [names, setNames] = useState([""]);
   const [booker, setBooker] = useState({ name: "", phone: "", email: "" });
@@ -101,7 +90,6 @@ function BookFlow({ store }) {
   function resetToStart() {
     setStep("service");
     setService(null);
-    setSelectedPoint(null);
     setSelectedRun(null);
     setNames([""]);
     setBooker({ name: "", phone: "", email: "" });
@@ -113,12 +101,7 @@ function BookFlow({ store }) {
   function chooseService(s) {
     setService(s);
     setError("");
-    if (s.model === "slots") {
-      setStep("slot");
-    } else {
-      setSelectedPoint(s.points[0]); // single drop-off
-      setStep("van");
-    }
+    setStep(s.model === "slots" ? "slot" : "departure");
   }
 
   function chooseSlot(slot) {
@@ -135,15 +118,14 @@ function BookFlow({ store }) {
     setStep("form");
   }
 
-  function chooseRun(van, tripId) {
-    if (store.seatsLeft(van.id, tripId) <= 0) return;
-    const trip = findTrip(service, tripId);
+  function chooseDeparture(dep) {
+    if (store.seatsLeftByRun(dep.id) <= 0) return;
     setSelectedRun({
-      runId: runKey(van.id, tripId),
-      kind: "van",
-      vanName: van.name,
-      plate: van.plate,
-      trip,
+      runId: dep.id,
+      kind: "departure",
+      time: dep.time,
+      van: { name: dep.van, plate: service.vanPlates?.[dep.van] ?? null },
+      point: service.dropoff,
     });
     setNames([""]);
     setError("");
@@ -176,14 +158,14 @@ function BookFlow({ store }) {
       ref: res.booking.ref,
       serviceLabel: service.label,
       locationRole: service.locationRole,
-      locationValue: isArrival ? pickupLocation.trim() : selectedPoint.name,
-      locationNote: isArrival ? "" : selectedPoint.note,
+      locationValue: isArrival ? pickupLocation.trim() : selectedRun.point.name,
+      locationNote: isArrival ? "" : selectedRun.point.note,
       van: isArrival
         ? "To be assigned by your driver"
-        : vanLabel(selectedRun.vanName, selectedRun.plate),
+        : vanLabel(selectedRun.van.name, selectedRun.van.plate),
       departure: isArrival
         ? `${selectedRun.slotLabel} · ${selectedRun.time}`
-        : `${selectedRun.trip.label} · ${selectedRun.trip.time}`,
+        : selectedRun.time,
       names: clean,
       booker: { ...booker },
     });
@@ -212,17 +194,15 @@ function BookFlow({ store }) {
         />
       )}
 
-      {step === "van" && service && selectedPoint && (
-        <VanStep
+      {step === "departure" && service && (
+        <DepartureStep
           service={service}
-          point={selectedPoint}
-          seatsLeft={store.seatsLeft}
+          seatsLeftByRun={store.seatsLeftByRun}
           onBack={() => {
             setStep("service");
             setService(null);
-            setSelectedPoint(null);
           }}
-          onChoose={chooseRun}
+          onPick={chooseDeparture}
         />
       )}
 
@@ -231,7 +211,6 @@ function BookFlow({ store }) {
           heading="Passenger details"
           service={service}
           run={selectedRun}
-          point={selectedPoint}
           isArrival={isArrival}
           names={names}
           setNames={setNames}
@@ -244,7 +223,7 @@ function BookFlow({ store }) {
           error={error}
           busy={busy}
           onBack={() => {
-            setStep(isArrival ? "slot" : "van");
+            setStep(isArrival ? "slot" : "departure");
             setSelectedRun(null);
             setError("");
           }}
@@ -337,6 +316,12 @@ function ManageView({ store }) {
     setMessage("Your booking has been cancelled. The seats are now free again.");
   }
 
+  const editRun =
+    ctx && isArrival
+      ? { kind: "slot", slotLabel: ctx.slot.label, time: ctx.slot.time }
+      : ctx
+        ? { kind: "departure", time: ctx.departure.time, van: ctx.van, point: ctx.point }
+        : null;
   const editSeatsLeft =
     ctx && found ? store.seatsLeftByRun(found.runId) + found.seats : 0;
 
@@ -423,21 +408,11 @@ function ManageView({ store }) {
         </>
       )}
 
-      {found && editing && ctx && (
+      {found && editing && editRun && (
         <FormStep
           heading="Edit your booking"
           service={ctx.service}
-          run={
-            isArrival
-              ? { kind: "slot", slotLabel: ctx.slot.label, time: ctx.slot.time }
-              : {
-                  kind: "van",
-                  vanName: ctx.van.name,
-                  plate: ctx.van.plate,
-                  trip: ctx.trip,
-                }
-          }
-          point={isArrival ? null : ctx.point}
+          run={editRun}
           isArrival={isArrival}
           names={names}
           setNames={setNames}
@@ -582,7 +557,7 @@ function AdminView({ store }) {
                 onCancel={cancelOne}
               />
             ) : (
-              <VanRunSection key={sec.runId} sec={sec} onCancel={cancelOne} />
+              <DepartureSection key={sec.runId} sec={sec} onCancel={cancelOne} />
             )
           )}
         </>
@@ -625,10 +600,7 @@ function ArrivalSlotSection({ sec, onAssign, onCancel }) {
         {vans.map((v) => (
           <span
             key={v}
-            style={{
-              ...S.tallyChip,
-              ...(tally[v] > 10 ? S.tallyChipOver : null),
-            }}
+            style={{ ...S.tallyChip, ...(tally[v] > 10 ? S.tallyChipOver : null) }}
           >
             {v}: {tally[v]}/10
           </span>
@@ -676,20 +648,20 @@ function ArrivalSlotSection({ sec, onAssign, onCancel }) {
   );
 }
 
-// After-party van-run: unchanged listing.
-function VanRunSection({ sec, onCancel }) {
-  const { service, point, van, trip } = sec.ctx;
+// After-party departure: one van at a fixed time.
+function DepartureSection({ sec, onCancel }) {
+  const { service, van, departure, point } = sec.ctx;
   const taken = sec.list.reduce((n, b) => n + b.seats, 0);
   return (
     <div style={S.runGroup}>
       <div style={S.runGroupHead}>
         <span>
-          {vanLabel(van.name, van.plate)} · {trip.label}
+          {departure.time} · {vanLabel(van.name, van.plate)}
         </span>
         <span style={{ fontSize: 14, color: "#a4562a" }}>{taken}/10 seats</span>
       </div>
       <div style={{ fontSize: 13, color: "#8a7150", marginTop: -6 }}>
-        {service.label} · {point.name} — {point.note} · {trip.time}
+        {service.label} · {point.name} — {point.note}
       </div>
       {sec.list.map((b) => (
         <div key={b.ref} style={S.bookingCard}>
@@ -714,7 +686,7 @@ function VanRunSection({ sec, onCancel }) {
   );
 }
 
-// Group bookings into ordered sections (arrival slots first, then van-runs).
+// Group bookings into ordered sections (by the ALL_RUNS order).
 function groupForAdmin(rows) {
   const map = new Map();
   for (const b of rows) {
@@ -788,10 +760,9 @@ function ServiceStep({ onPick, seatsLeftByRun, loading }) {
       <div className="rustic-grid-2">
         {SERVICES.map((s) => {
           const total = serviceSeatsLeft(s, seatsLeftByRun);
-          const meta =
-            s.model === "slots"
-              ? `${s.slots.length} pickup times · ${total} seats available`
-              : `${serviceVanCount(s)} vans · ${total} seats available`;
+          const count =
+            s.model === "slots" ? s.slots.length : s.departures.length;
+          const unit = s.model === "slots" ? "pickup times" : "departure times";
           return (
             <button
               key={s.id}
@@ -803,7 +774,9 @@ function ServiceStep({ onPick, seatsLeftByRun, loading }) {
               <div style={S.pointName}>{s.label}</div>
               <div style={S.pointNote}>{s.blurb}</div>
               <div style={S.divider} />
-              <div style={S.pointMeta}>{meta}</div>
+              <div style={S.pointMeta}>
+                {count} {unit} · {total} seats available
+              </div>
               <div style={S.chooseHint}>Select →</div>
             </button>
           );
@@ -819,6 +792,34 @@ function seatTone(left) {
   return { bg: "#e4ead9", fg: "#4f6135", label: `${left} left` };
 }
 
+// Generic time-card picker used by both arrival slots and after-party departures.
+function TimeCard({ title, subtitle, left, onPick }) {
+  const tone = seatTone(left);
+  const full = left <= 0;
+  return (
+    <button
+      disabled={full}
+      onClick={onPick}
+      className={full ? "" : "rustic-card"}
+      style={{
+        ...S.pointCard,
+        opacity: full ? 0.55 : 1,
+        cursor: full ? "not-allowed" : "pointer",
+      }}
+    >
+      <div style={S.pointName}>{title}</div>
+      {subtitle && <div style={S.pointNote}>{subtitle}</div>}
+      <div style={S.divider} />
+      <div style={S.pointMeta}>
+        <span style={{ ...S.seatBadge, background: tone.bg, color: tone.fg }}>
+          {tone.label}
+        </span>
+      </div>
+      {!full && <div style={S.chooseHint}>Select →</div>}
+    </button>
+  );
+}
+
 function SlotStep({ service, seatsLeftByRun, onBack, onPick }) {
   return (
     <section>
@@ -827,86 +828,40 @@ function SlotStep({ service, seatsLeftByRun, onBack, onPick }) {
       </button>
       <StepLabel n="2">Choose your pickup time</StepLabel>
       <div className="rustic-grid-2">
-        {service.slots.map((slot) => {
-          const left = seatsLeftByRun(slot.id);
-          const tone = seatTone(left);
-          const full = left <= 0;
-          return (
-            <button
-              key={slot.id}
-              disabled={full}
-              onClick={() => onPick(slot)}
-              className={full ? "" : "rustic-card"}
-              style={{
-                ...S.pointCard,
-                opacity: full ? 0.55 : 1,
-                cursor: full ? "not-allowed" : "pointer",
-              }}
-            >
-              <div style={S.pointName}>{slot.label}</div>
-              <div style={S.pointNote}>{slot.time}</div>
-              <div style={S.divider} />
-              <div style={S.pointMeta}>
-                <span
-                  style={{ ...S.seatBadge, background: tone.bg, color: tone.fg }}
-                >
-                  {tone.label}
-                </span>
-              </div>
-              {!full && <div style={S.chooseHint}>Select →</div>}
-            </button>
-          );
-        })}
+        {service.slots.map((slot) => (
+          <TimeCard
+            key={slot.id}
+            title={slot.label}
+            subtitle={slot.time}
+            left={seatsLeftByRun(slot.id)}
+            onPick={() => onPick(slot)}
+          />
+        ))}
       </div>
       {BOARDING_NOTE && <p style={S.boardingNote}>⏱ {BOARDING_NOTE}</p>}
     </section>
   );
 }
 
-function VanStep({ service, point, seatsLeft, onBack, onChoose }) {
+function DepartureStep({ service, seatsLeftByRun, onBack, onPick }) {
   return (
     <section>
       <button style={S.back} onClick={onBack}>
         ← Change shuttle
       </button>
-      <StepLabel n="2">Choose a van &amp; departure</StepLabel>
+      <StepLabel n="2">Choose your departure time</StepLabel>
       <p style={{ ...S.noteText, marginTop: -6 }}>{service.blurb}</p>
-
-      <div style={S.vanList}>
-        {point.vans.map((v) => (
-          <div key={v.id} style={S.vanCard}>
-            <div style={S.vanHead}>{vanLabel(v.name, v.plate)}</div>
-            <div className="rustic-trip-row">
-              {service.trips.map((t) => {
-                const left = seatsLeft(v.id, t.id);
-                const tone = seatTone(left);
-                const full = left <= 0;
-                return (
-                  <button
-                    key={t.id}
-                    disabled={full}
-                    onClick={() => onChoose(v, t.id)}
-                    className={full ? "" : "rustic-card"}
-                    style={{
-                      ...S.tripBtn,
-                      opacity: full ? 0.55 : 1,
-                      cursor: full ? "not-allowed" : "pointer",
-                    }}
-                  >
-                    <div style={S.tripLabel}>{t.label}</div>
-                    <div style={S.tripTime}>{t.time}</div>
-                    <span
-                      style={{ ...S.seatBadge, background: tone.bg, color: tone.fg }}
-                    >
-                      {tone.label}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+      <div className="rustic-grid-2">
+        {service.departures.map((dep) => (
+          <TimeCard
+            key={dep.id}
+            title={dep.time}
+            left={seatsLeftByRun(dep.id)}
+            onPick={() => onPick(dep)}
+          />
         ))}
       </div>
+      {BOARDING_NOTE && <p style={S.boardingNote}>⏱ {BOARDING_NOTE}</p>}
     </section>
   );
 }
@@ -915,7 +870,6 @@ function FormStep({
   heading,
   service,
   run,
-  point,
   isArrival,
   names,
   setNames,
@@ -967,12 +921,12 @@ function FormStep({
         ) : (
           <>
             <div>
-              <strong>{vanLabel(run.vanName, run.plate)}</strong> ·{" "}
-              {service.locationRole}: {point.name}{" "}
-              <span style={S.summaryNote}>({point.note})</span>
+              <strong>Departure · {run.time}</strong>
             </div>
             <div style={S.summaryTrip}>
-              {run.trip.label} — {run.trip.time}
+              {vanLabel(run.van.name, run.van.plate)} · {service.locationRole}:{" "}
+              {run.point.name}{" "}
+              <span style={S.summaryNote}>({run.point.note})</span>
             </div>
           </>
         )}
@@ -1186,7 +1140,7 @@ function exportCsv(bookings) {
     "shuttle",
     "when",
     "pickup_or_dropoff",
-    "assigned_van",
+    "van",
     "booker_name",
     "booker_phone",
     "booker_email",
@@ -1198,16 +1152,17 @@ function exportCsv(bookings) {
     const ctx = findRunContext(b.runId);
     const when = ctx?.slot
       ? `${ctx.slot.label} ${ctx.slot.time}`
-      : ctx
-        ? `${ctx.trip.label} ${ctx.trip.time}`
+      : ctx?.departure
+        ? ctx.departure.time
         : "";
     const loc = ctx?.slot ? b.pickupLocation : ctx?.point?.name ?? "";
+    const van = ctx?.slot ? (b.assignedVan ?? "") : (ctx?.van?.name ?? "");
     return [
       b.ref,
       ctx?.service?.label ?? "",
       when,
       loc,
-      b.assignedVan ?? "",
+      van,
       b.bookerName,
       b.bookerPhone,
       b.bookerEmail ?? "",

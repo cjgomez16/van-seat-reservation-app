@@ -52,23 +52,24 @@ export const SERVICES = [
     label: "From the venue",
     blurb: "Shuttle from Itogon Mountain Village to the drop-off point.",
     icon: "☾",
-    model: "vans",
+    model: "timelist", // guest picks a DEPARTURE TIME (van is fixed per time)
     locationRole: "Drop-off",
-    trips: [
-      { id: "at1", label: "First Trip", time: "10:00 PM" },
-      { id: "at2", label: "Second Trip", time: "11:30 PM" },
-    ],
-    points: [
-      {
-        id: "D",
-        name: "Drop-off Point",
-        note: "To be announced",
-        vans: [
-          { id: "a1", name: "Van 1", plate: null },
-          { id: "a2", name: "Van 2", plate: null },
-          { id: "a3", name: "Van 3", plate: null },
-        ],
-      },
+    dropoff: { name: "Drop-off Point", note: "To be announced" },
+    // Physical vans — a plate here applies to all of that van's departures.
+    vanPlates: { "Van 1": null, "Van 2": null, "Van 3": null },
+    // Staggered departures: 3 vans × 3 trips, each offset 30 min, ~90 min
+    // between a van's own trips. Each is one van-run of SEATS_PER_RUN seats.
+    // Ids stay a{van}-at{trip} to match van_runs. Listed in time order.
+    departures: [
+      { id: "a1-at1", time: "10:00 PM", van: "Van 1" },
+      { id: "a2-at1", time: "10:30 PM", van: "Van 2" },
+      { id: "a3-at1", time: "11:00 PM", van: "Van 3" },
+      { id: "a1-at2", time: "11:30 PM", van: "Van 1" },
+      { id: "a2-at2", time: "12:00 AM", van: "Van 2" },
+      { id: "a3-at2", time: "12:30 AM", van: "Van 3" },
+      { id: "a1-at3", time: "1:00 AM", van: "Van 1" },
+      { id: "a2-at3", time: "1:30 AM", van: "Van 2" },
+      { id: "a3-at3", time: "2:00 AM", van: "Van 3" },
     ],
   },
 ];
@@ -103,18 +104,15 @@ export const ALL_RUNS = SERVICES.flatMap((service) => {
       slot,
     }));
   }
-  return service.points.flatMap((point) =>
-    point.vans.flatMap((van) =>
-      service.trips.map((trip) => ({
-        runId: runKey(van.id, trip.id),
-        capacity: SEATS_PER_RUN,
-        service,
-        point,
-        van,
-        trip,
-      }))
-    )
-  );
+  // timelist: each departure is one van-run.
+  return service.departures.map((dep) => ({
+    runId: dep.id,
+    capacity: SEATS_PER_RUN,
+    service,
+    departure: dep,
+    van: { name: dep.van, plate: service.vanPlates?.[dep.van] ?? null },
+    point: service.dropoff,
+  }));
 });
 
 const RUN_BY_ID = new Map(ALL_RUNS.map((r) => [r.runId, r]));

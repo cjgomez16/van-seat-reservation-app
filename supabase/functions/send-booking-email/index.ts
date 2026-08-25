@@ -96,7 +96,9 @@ Deno.serve(async (req) => {
     van: isArrival
       ? (booking.assigned_van || "To be assigned by your driver")
       : (run?.van_name ?? ""),
-    departure: run ? `${run.trip_label} · ${run.trip_time}` : "",
+    departure: run
+      ? (run.trip_label ? `${run.trip_label} · ${run.trip_time}` : run.trip_time)
+      : "",
     passengers: booking.passengers ?? [],
     bookerName: booking.booker_name,
   };
