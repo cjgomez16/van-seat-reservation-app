@@ -131,13 +131,13 @@ function messageFor(kind: string, serviceLabel: string) {
   }
   if (kind === "UPDATE") {
     return {
-      heading: "Reserve Your Ride",
+      heading: "Your booking is updated",
       subject: "Your shuttle booking was updated",
       lead: `Here are the latest details for your ${serviceLabel.toLowerCase()} booking.`,
     };
   }
   return {
-    heading: "Reserve Your Ride",
+    heading: "Your ride is reserved",
     subject: "Your shuttle seat is reserved 🚐",
     lead: `You're all set! Here are the details for your ${serviceLabel.toLowerCase()} booking.`,
   };
@@ -178,7 +178,7 @@ function renderEmail(d: {
       <table style="width:100%;border-collapse:collapse;">
         ${row("Shuttle", escapeHtml(d.serviceLabel))}
         ${row(escapeHtml(d.pointRole), escapeHtml(d.point))}
-        ${row("Where", escapeHtml(d.pointNote))}
+        ${d.pointNote ? row("Where", escapeHtml(d.pointNote)) : ""}
         ${row("Van", escapeHtml(d.van))}
         ${row("Departure", escapeHtml(d.departure))}
         ${row("Booked by", escapeHtml(d.bookerName))}
