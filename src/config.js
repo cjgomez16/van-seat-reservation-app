@@ -36,7 +36,7 @@ export const BOARDING_NOTE =
 export const SERVICES = [
   {
     id: "arrival",
-    label: "Arrival to the venue",
+    label: "To the venue",
     blurb: "Shuttle to Itogon Mountain Village — we'll pick you up in town.",
     icon: "☀",
     model: "slots",
@@ -49,7 +49,7 @@ export const SERVICES = [
   },
   {
     id: "afterparty",
-    label: "After-party departure",
+    label: "From the venue",
     blurb: "Shuttle from Itogon Mountain Village to the drop-off point.",
     icon: "☾",
     model: "vans",

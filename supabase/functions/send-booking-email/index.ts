@@ -83,7 +83,7 @@ Deno.serve(async (req) => {
 
   // Arrival slot runs are ids like "arr-115"; after-party are "a1-at1".
   const isArrival = booking.run_id.startsWith("arr");
-  const serviceLabel = isArrival ? "Arrival to the venue" : "After-party departure";
+  const serviceLabel = isArrival ? "To the venue" : "From the venue";
   const pointRole = isArrival ? "Pickup" : "Drop-off";
 
   const details = {
@@ -101,7 +101,7 @@ Deno.serve(async (req) => {
     bookerName: booking.booker_name,
   };
 
-  const { subject, lead, heading } = messageFor(kind, details.serviceLabel);
+  const { subject, lead, heading } = messageFor(kind);
   const html = renderEmail({ ...details, lead, heading, kind });
 
   const res = await fetch("https://api.resend.com/emails", {
@@ -121,25 +121,25 @@ Deno.serve(async (req) => {
   return json({ sent: to, kind });
 });
 
-function messageFor(kind: string, serviceLabel: string) {
+function messageFor(kind: string) {
   if (kind === "DELETE") {
     return {
       heading: "Your ride has been cancelled",
       subject: "Your shuttle booking was cancelled",
-      lead: `Your booking for the ${serviceLabel.toLowerCase()} has been cancelled and the seats released. If this wasn't you, you can book again below or get in touch.`,
+      lead: "Your shuttle booking has been cancelled and the seats released. If this wasn't you, you can book again below or get in touch.",
     };
   }
   if (kind === "UPDATE") {
     return {
       heading: "Your booking is updated",
       subject: "Your shuttle booking was updated",
-      lead: `Here are the latest details for your ${serviceLabel.toLowerCase()} booking.`,
+      lead: "Here are the latest details for your shuttle booking.",
     };
   }
   return {
     heading: "Your ride is reserved",
     subject: "Your shuttle seat is reserved 🚐",
-    lead: `You're all set! Here are the details for your ${serviceLabel.toLowerCase()} booking.`,
+    lead: "You're all set! Here are your shuttle booking details.",
   };
 }
 
