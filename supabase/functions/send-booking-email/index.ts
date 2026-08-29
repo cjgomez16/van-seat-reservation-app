@@ -90,9 +90,9 @@ Deno.serve(async (req) => {
     ref: booking.ref,
     serviceLabel,
     pointRole,
-    // Arrival: the guest's typed pickup location + head-assigned van.
-    point: isArrival ? (booking.pickup_location ?? "") : (run?.point_name ?? ""),
-    pointNote: isArrival ? "" : (run?.point_note ?? ""),
+    // Both services now use the guest's typed location (pickup or drop-off).
+    point: booking.pickup_location ?? "",
+    pointNote: "",
     van: isArrival
       ? (booking.assigned_van || "To be assigned by your driver")
       : (run?.van_name ?? ""),

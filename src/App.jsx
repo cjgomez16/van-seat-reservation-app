@@ -41,8 +41,8 @@ function runDisplay(ctx, booking) {
   return {
     serviceLabel: s.label,
     locationRole: s.locationRole,
-    locationValue: ctx.point.name,
-    locationNote: ctx.point.note,
+    locationValue: booking?.pickupLocation || "—",
+    locationNote: "",
     van: vanLabel(ctx.van.name, ctx.van.plate),
     departure: ctx.departure.time,
   };
@@ -137,8 +137,9 @@ function BookFlow({ store }) {
     const clean = names.map((n) => n.trim()).filter(Boolean);
 
     const err = validateBooking(booker, clean, {
-      requireLocation: isArrival,
+      requireLocation: true,
       pickupLocation,
+      locationRole: service.locationRole,
     });
     if (err) return setError(err);
 
@@ -148,7 +149,7 @@ function BookFlow({ store }) {
       bookerName: booker.name.trim(),
       bookerPhone: booker.phone.trim(),
       bookerEmail: booker.email.trim(),
-      pickupLocation: isArrival ? pickupLocation.trim() : null,
+      pickupLocation: pickupLocation.trim(),
       passengers: clean,
     });
     setBusy(false);
@@ -158,8 +159,8 @@ function BookFlow({ store }) {
       ref: res.booking.ref,
       serviceLabel: service.label,
       locationRole: service.locationRole,
-      locationValue: isArrival ? pickupLocation.trim() : selectedRun.point.name,
-      locationNote: isArrival ? "" : selectedRun.point.note,
+      locationValue: pickupLocation.trim(),
+      locationNote: "",
       van: isArrival
         ? "To be assigned by your driver"
         : vanLabel(selectedRun.van.name, selectedRun.van.plate),
@@ -283,8 +284,9 @@ function ManageView({ store }) {
     setError("");
     const clean = names.map((n) => n.trim()).filter(Boolean);
     const err = validateBooking(booker, clean, {
-      requireLocation: isArrival,
+      requireLocation: true,
       pickupLocation,
+      locationRole: ctx.service.locationRole,
     });
     if (err) return setError(err);
 
@@ -293,7 +295,7 @@ function ManageView({ store }) {
       bookerName: booker.name.trim(),
       bookerPhone: booker.phone.trim(),
       bookerEmail: booker.email.trim(),
-      pickupLocation: isArrival ? pickupLocation.trim() : undefined,
+      pickupLocation: pickupLocation.trim(),
       passengers: clean,
     });
     setBusy(false);
@@ -650,7 +652,7 @@ function ArrivalSlotSection({ sec, onAssign, onCancel }) {
 
 // After-party departure: one van at a fixed time.
 function DepartureSection({ sec, onCancel }) {
-  const { service, van, departure, point } = sec.ctx;
+  const { service, van, departure } = sec.ctx;
   const taken = sec.list.reduce((n, b) => n + b.seats, 0);
   return (
     <div style={S.runGroup}>
@@ -661,18 +663,18 @@ function DepartureSection({ sec, onCancel }) {
         <span style={{ fontSize: 14, color: "#a4562a" }}>{taken}/10 seats</span>
       </div>
       <div style={{ fontSize: 13, color: "#8a7150", marginTop: -6 }}>
-        {service.label} · {point.name} — {point.note}
+        {service.label} · drop-offs below
       </div>
       {sec.list.map((b) => (
         <div key={b.ref} style={S.bookingCard}>
           <div style={S.bookingHeadRow}>
             <div>
-              <strong>{b.bookerName}</strong>{" "}
-              <span style={{ color: "#a4562a" }}>({b.ref})</span>
+              <strong>📍 {b.pickupLocation || "(no drop-off given)"}</strong>
               <div style={S.meta}>
-                {b.bookerPhone}
+                {b.bookerName} · {b.bookerPhone}
                 {b.bookerEmail ? ` · ${b.bookerEmail}` : ""} · {b.seats} seat
-                {b.seats === 1 ? "" : "s"}
+                {b.seats === 1 ? "" : "s"}{" "}
+                <span style={{ color: "#a4562a" }}>({b.ref})</span>
               </div>
               <div style={S.meta}>{b.passengers.join(", ")}</div>
             </div>
@@ -924,9 +926,8 @@ function FormStep({
               <strong>Departure · {run.time}</strong>
             </div>
             <div style={S.summaryTrip}>
-              {vanLabel(run.van.name, run.van.plate)} · {service.locationRole}:{" "}
-              {run.point.name}{" "}
-              <span style={S.summaryNote}>({run.point.note})</span>
+              {vanLabel(run.van.name, run.van.plate)} — we'll drop you at the
+              location you enter below.
             </div>
           </>
         )}
@@ -959,22 +960,22 @@ function FormStep({
         onChange={(e) => setBooker({ ...booker, email: e.target.value })}
       />
 
-      {isArrival && (
-        <>
-          <label style={S.fieldLabel}>
-            Pickup location{" "}
-            <span style={{ color: "#a4562a", fontStyle: "normal" }}>
-              (where should we get you?)
-            </span>
-          </label>
-          <input
-            style={S.input}
-            placeholder="Hotel, address, or landmark in town"
-            value={pickupLocation}
-            onChange={(e) => setPickupLocation(e.target.value)}
-          />
-        </>
-      )}
+      <label style={S.fieldLabel}>
+        {service.locationRole} location{" "}
+        <span style={{ color: "#a4562a", fontStyle: "normal" }}>
+          ({isArrival ? "where should we get you?" : "where should we take you?"})
+        </span>
+      </label>
+      <input
+        style={S.input}
+        placeholder={
+          isArrival
+            ? "Hotel, address, or landmark in town"
+            : "Where should we drop you off?"
+        }
+        value={pickupLocation}
+        onChange={(e) => setPickupLocation(e.target.value)}
+      />
 
       <label style={{ ...S.fieldLabel, marginTop: 18 }}>Passenger name(s)</label>
       {names.map((nm, i) => (
@@ -1109,13 +1110,17 @@ function Footer() {
 
 /* ---------- Shared validation + helpers ---------- */
 
-function validateBooking(booker, cleanNames, { requireLocation, pickupLocation } = {}) {
+function validateBooking(
+  booker,
+  cleanNames,
+  { requireLocation, pickupLocation, locationRole } = {}
+) {
   if (!booker.name.trim()) return "Please enter the booker's name.";
   if (!booker.phone.trim()) return "Please enter a contact number.";
   if (booker.email.trim() && !booker.email.includes("@"))
     return "That email doesn't look right — please check it.";
   if (requireLocation && !(pickupLocation || "").trim())
-    return "Please enter your pickup location.";
+    return `Please enter your ${(locationRole || "Pickup").toLowerCase()} location.`;
   if (cleanNames.length === 0) return "Please enter at least one passenger name.";
   return null;
 }
@@ -1155,7 +1160,7 @@ function exportCsv(bookings) {
       : ctx?.departure
         ? ctx.departure.time
         : "";
-    const loc = ctx?.slot ? b.pickupLocation : ctx?.point?.name ?? "";
+    const loc = b.pickupLocation || (ctx?.point?.name ?? "");
     const van = ctx?.slot ? (b.assignedVan ?? "") : (ctx?.van?.name ?? "");
     return [
       b.ref,
