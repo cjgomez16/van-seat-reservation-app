@@ -41,7 +41,7 @@ export const SERVICES = [
     icon: "☀",
     model: "slots",
     locationRole: "Pickup", // label for the location on tickets/emails
-    vansPerSlot: 4, // head assigns Van 1..N; sets the per-slot seat cap
+    vansPerSlot: 3, // head assigns Van 1..N; sets the per-slot seat cap
     slots: [
       { id: "arr-115", label: "First pickup", time: "1:15 PM" },
       { id: "arr-145", label: "Second pickup", time: "1:45 PM" },
