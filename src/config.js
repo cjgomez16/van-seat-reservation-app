@@ -1,22 +1,18 @@
 /*
   EVENT CONFIG — the only file you edit to change event details.
   ------------------------------------------------------------------
-  Two shuttle SERVICES, each with a different booking MODEL:
+  Two shuttle SERVICES, both "timelist": the guest picks a TIME from a flat
+  list; the van is FIXED per time, and the pickup/drop-off is a single FIXED
+  location (`fixedLocation`), so there is no guest location field and no
+  head-driver van assignment.
 
-    - "arrival"  (model: "slots") — guest picks a PICKUP TIME, then types
-      their own pickup location. No fixed points, no guest-facing van pick.
-      The head driver assigns each booking to a van afterward (admin panel).
-      Capacity is per time slot = vansPerSlot × SEATS_PER_RUN.
+    - "arrival"   ("To the venue"):    Grand Sierra → Itogon Mountain Village
+    - "afterparty" ("From the venue"): Itogon Mountain Village → Grand Sierra
 
-    - "afterparty" (model: "vans") — guest picks a VAN + evening trip to a
-      single drop-off point (unchanged).
-
-  Run ids are unique across services: arrival slots are "arr-115"/"arr-145";
-  after-party runs are "${vanId}-${tripId}" (a1-at1 …). Keep this file in sync
-  with the seed rows in supabase/migrations/*.sql (the live DB books against
-  van_runs, and the email reads labels from it).
-
-  Each van has an optional `plate` (null until provided).
+  Run ids encode the time: arrival "arr-HHMM", after-party "ap-HHMM". Keep this
+  file in sync with the seed rows in supabase/migrations/*.sql (the live DB
+  books against van_runs, and the email reads labels from it). Van plates are
+  optional via vanPlates (a plate applies to all of that van's runs).
 */
 
 export const SEATS_PER_RUN = 10;
@@ -25,9 +21,9 @@ export const SEATS_PER_RUN = 10;
 export const MAX_PER_BOOKER = 10;
 
 // Wedding details shown in the header. Set EVENT_DATE to null to hide the date.
-export const COUPLE = "Candy Gamos & Jonas Vergara";
-export const VENUE = "Itogon Mountain Village (IMV)";
-export const EVENT_DATE = "October 1, 2026";
+export const COUPLE = "Nicole (Coco) & Roland (Gary)";
+export const VENUE = "Itogon Mountain Village";
+export const EVENT_DATE = "November 20, 2026";
 
 // Shown under the times and on the confirmation. Set to null to hide.
 export const BOARDING_NOTE =
@@ -37,44 +33,37 @@ export const SERVICES = [
   {
     id: "arrival",
     label: "To the venue",
-    blurb: "Shuttle to Itogon Mountain Village — we'll pick you up in town.",
+    blurb: "Shuttle from Grand Sierra up to Itogon Mountain Village.",
     icon: "☀",
-    model: "slots",
-    locationRole: "Pickup", // label for the location on tickets/emails
-    vansPerSlot: 3, // head assigns Van 1..N; sets the per-slot seat cap
-    slots: [
-      { id: "arr-115", label: "First pickup", time: "1:15 PM" },
-      { id: "arr-145", label: "Second pickup", time: "1:45 PM" },
+    model: "timelist",
+    locationRole: "Pickup",
+    fixedLocation: "Grand Sierra",
+    vanPlates: { "Van 1": null, "Van 2": null },
+    // 1:00 PM and 2:30 PM are the same physical van (Van 1); 2:00 PM is Van 2.
+    departures: [
+      { id: "arr-1300", time: "1:00 PM", van: "Van 1" },
+      { id: "arr-1400", time: "2:00 PM", van: "Van 2" },
+      { id: "arr-1430", time: "2:30 PM", van: "Van 1" },
     ],
   },
   {
     id: "afterparty",
     label: "From the venue",
-    blurb: "Shuttle from Itogon Mountain Village to the drop-off point.",
+    blurb: "Shuttle from Itogon Mountain Village back to Grand Sierra.",
     icon: "☾",
-    model: "timelist", // guest picks a DEPARTURE TIME (van is fixed per time)
+    model: "timelist",
     locationRole: "Drop-off",
-    dropoff: { name: "Drop-off Point", note: "To be announced" },
-    // Physical vans — a plate here applies to all of that van's departures.
-    vanPlates: { "Van 1": null, "Van 2": null, "Van 3": null },
-    // Staggered departures: 3 vans × 3 trips, each offset 30 min, ~90 min
-    // between a van's own trips. Each is one van-run of SEATS_PER_RUN seats.
-    // Ids stay a{van}-at{trip} to match van_runs. Listed in time order.
+    fixedLocation: "Grand Sierra",
+    vanPlates: { "Van 1": null, "Van 2": null },
+    // Two separate vans, one per departure time.
     departures: [
-      { id: "a1-at1", time: "10:00 PM", van: "Van 1" },
-      { id: "a2-at1", time: "10:30 PM", van: "Van 2" },
-      { id: "a3-at1", time: "11:00 PM", van: "Van 3" },
-      { id: "a1-at2", time: "11:30 PM", van: "Van 1" },
-      { id: "a2-at2", time: "12:00 AM", van: "Van 2" },
-      { id: "a3-at2", time: "12:30 AM", van: "Van 3" },
-      { id: "a1-at3", time: "1:00 AM", van: "Van 1" },
-      { id: "a2-at3", time: "1:30 AM", van: "Van 2" },
-      { id: "a3-at3", time: "2:00 AM", van: "Van 3" },
+      { id: "ap-2130", time: "9:30 PM", van: "Van 1" },
+      { id: "ap-2230", time: "10:30 PM", van: "Van 2" },
     ],
   },
 ];
 
-// key for a van-run: `${vanId}-${tripId}` — matches van_runs.id in Supabase.
+// key for a van-run (kept for the stores' convenience helpers).
 export function runKey(vanId, tripId) {
   return `${vanId}-${tripId}`;
 }
@@ -83,41 +72,21 @@ export function getService(serviceId) {
   return SERVICES.find((s) => s.id === serviceId) || null;
 }
 
-export function findTrip(service, tripId) {
-  return service?.trips ? service.trips.find((t) => t.id === tripId) || null : null;
-}
-
-// Vans the head can assign for a slots-model service (Van 1..vansPerSlot).
-export function assignableVans(service) {
-  const n = service?.vansPerSlot || 0;
-  return Array.from({ length: n }, (_, i) => `Van ${i + 1}`);
-}
-
 // Flattened catalogue of every run across both services, with capacity.
-export const ALL_RUNS = SERVICES.flatMap((service) => {
-  if (service.model === "slots") {
-    const capacity = service.vansPerSlot * SEATS_PER_RUN;
-    return service.slots.map((slot) => ({
-      runId: slot.id,
-      capacity,
-      service,
-      slot,
-    }));
-  }
-  // timelist: each departure is one van-run.
-  return service.departures.map((dep) => ({
+export const ALL_RUNS = SERVICES.flatMap((service) =>
+  service.departures.map((dep) => ({
     runId: dep.id,
     capacity: SEATS_PER_RUN,
     service,
     departure: dep,
     van: { name: dep.van, plate: service.vanPlates?.[dep.van] ?? null },
-    point: service.dropoff,
-  }));
-});
+    location: service.fixedLocation,
+  }))
+);
 
 const RUN_BY_ID = new Map(ALL_RUNS.map((r) => [r.runId, r]));
 
-// runId -> { service, capacity, slot | (point, van, trip) } for display.
+// runId -> { service, capacity, departure, van, location } for display.
 export function findRunContext(runId) {
   return RUN_BY_ID.get(runId) || null;
 }

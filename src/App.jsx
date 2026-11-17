@@ -7,7 +7,6 @@ import {
   VENUE,
   BOARDING_NOTE,
   findRunContext,
-  assignableVans,
 } from "./config.js";
 import { useBookings, BACKEND } from "./store.js";
 import { S, GLOBAL_CSS } from "./styles.js";
@@ -20,28 +19,16 @@ function vanLabel(name, plate) {
 }
 
 function serviceSeatsLeft(service, seatsLeftByRun) {
-  if (service.model === "slots")
-    return service.slots.reduce((n, s) => n + seatsLeftByRun(s.id), 0);
   return service.departures.reduce((n, d) => n + seatsLeftByRun(d.id), 0);
 }
 
 // Display fields for a booking's run (used in tickets / manage / admin).
 function runDisplay(ctx, booking) {
   const s = ctx.service;
-  if (ctx.slot) {
-    return {
-      serviceLabel: s.label,
-      locationRole: s.locationRole,
-      locationValue: booking?.pickupLocation || "—",
-      locationNote: "",
-      van: booking?.assignedVan || "To be assigned by your driver",
-      departure: `${ctx.slot.label} · ${ctx.slot.time}`,
-    };
-  }
   return {
     serviceLabel: s.label,
     locationRole: s.locationRole,
-    locationValue: booking?.pickupLocation || "—",
+    locationValue: s.fixedLocation || booking?.pickupLocation || "—",
     locationNote: "",
     van: vanLabel(ctx.van.name, ctx.van.plate),
     departure: ctx.departure.time,
@@ -69,12 +56,10 @@ export default function App() {
   );
 }
 
-/* ---------- Booking flow ---------- */
-// arrival (slots):   service → pick time → form (+ pickup location)
-// afterparty (list): service → pick departure time → form
+/* ---------- Booking flow: service → pick a time → form → done ---------- */
 
 function BookFlow({ store }) {
-  const [step, setStep] = useState("service"); // service | slot | departure | form | done
+  const [step, setStep] = useState("service"); // service | departure | form | done
   const [service, setService] = useState(null);
   const [selectedRun, setSelectedRun] = useState(null);
   const [names, setNames] = useState([""]);
@@ -85,7 +70,6 @@ function BookFlow({ store }) {
   const [confirmation, setConfirmation] = useState(null);
 
   const filledNames = names.map((n) => n.trim()).filter(Boolean);
-  const isArrival = service?.model === "slots";
 
   function resetToStart() {
     setStep("service");
@@ -101,16 +85,16 @@ function BookFlow({ store }) {
   function chooseService(s) {
     setService(s);
     setError("");
-    setStep(s.model === "slots" ? "slot" : "departure");
+    setStep("departure");
   }
 
-  function chooseSlot(slot) {
-    if (store.seatsLeftByRun(slot.id) <= 0) return;
+  function chooseDeparture(dep) {
+    if (store.seatsLeftByRun(dep.id) <= 0) return;
     setSelectedRun({
-      runId: slot.id,
-      kind: "slot",
-      slotLabel: slot.label,
-      time: slot.time,
+      runId: dep.id,
+      time: dep.time,
+      van: { name: dep.van, plate: service.vanPlates?.[dep.van] ?? null },
+      location: service.fixedLocation,
     });
     setNames([""]);
     setPickupLocation("");
@@ -118,30 +102,19 @@ function BookFlow({ store }) {
     setStep("form");
   }
 
-  function chooseDeparture(dep) {
-    if (store.seatsLeftByRun(dep.id) <= 0) return;
-    setSelectedRun({
-      runId: dep.id,
-      kind: "departure",
-      time: dep.time,
-      van: { name: dep.van, plate: service.vanPlates?.[dep.van] ?? null },
-      point: service.dropoff,
-    });
-    setNames([""]);
-    setError("");
-    setStep("form");
-  }
-
   async function submitBooking() {
     setError("");
     const clean = names.map((n) => n.trim()).filter(Boolean);
+    const needLocation = !service.fixedLocation;
 
     const err = validateBooking(booker, clean, {
-      requireLocation: true,
+      requireLocation: needLocation,
       pickupLocation,
       locationRole: service.locationRole,
     });
     if (err) return setError(err);
+
+    const location = service.fixedLocation || pickupLocation.trim();
 
     setBusy(true);
     const res = await store.createBooking({
@@ -149,7 +122,7 @@ function BookFlow({ store }) {
       bookerName: booker.name.trim(),
       bookerPhone: booker.phone.trim(),
       bookerEmail: booker.email.trim(),
-      pickupLocation: pickupLocation.trim(),
+      pickupLocation: location,
       passengers: clean,
     });
     setBusy(false);
@@ -159,14 +132,9 @@ function BookFlow({ store }) {
       ref: res.booking.ref,
       serviceLabel: service.label,
       locationRole: service.locationRole,
-      locationValue: pickupLocation.trim(),
-      locationNote: "",
-      van: isArrival
-        ? "To be assigned by your driver"
-        : vanLabel(selectedRun.van.name, selectedRun.van.plate),
-      departure: isArrival
-        ? `${selectedRun.slotLabel} · ${selectedRun.time}`
-        : selectedRun.time,
+      locationValue: location,
+      van: vanLabel(selectedRun.van.name, selectedRun.van.plate),
+      departure: selectedRun.time,
       names: clean,
       booker: { ...booker },
     });
@@ -180,18 +148,6 @@ function BookFlow({ store }) {
           loading={store.loading}
           seatsLeftByRun={store.seatsLeftByRun}
           onPick={chooseService}
-        />
-      )}
-
-      {step === "slot" && service && (
-        <SlotStep
-          service={service}
-          seatsLeftByRun={store.seatsLeftByRun}
-          onBack={() => {
-            setStep("service");
-            setService(null);
-          }}
-          onPick={chooseSlot}
         />
       )}
 
@@ -212,7 +168,6 @@ function BookFlow({ store }) {
           heading="Passenger details"
           service={service}
           run={selectedRun}
-          isArrival={isArrival}
           names={names}
           setNames={setNames}
           booker={booker}
@@ -224,7 +179,7 @@ function BookFlow({ store }) {
           error={error}
           busy={busy}
           onBack={() => {
-            setStep(isArrival ? "slot" : "departure");
+            setStep("departure");
             setSelectedRun(null);
             setError("");
           }}
@@ -255,7 +210,6 @@ function ManageView({ store }) {
   const [busy, setBusy] = useState(false);
 
   const ctx = found ? findRunContext(found.runId) : null;
-  const isArrival = ctx?.slot != null;
   const disp = ctx ? runDisplay(ctx, found) : null;
 
   async function doLookup() {
@@ -283,8 +237,9 @@ function ManageView({ store }) {
   async function saveEdit() {
     setError("");
     const clean = names.map((n) => n.trim()).filter(Boolean);
+    const needLocation = !ctx.service.fixedLocation;
     const err = validateBooking(booker, clean, {
-      requireLocation: true,
+      requireLocation: needLocation,
       pickupLocation,
       locationRole: ctx.service.locationRole,
     });
@@ -295,7 +250,7 @@ function ManageView({ store }) {
       bookerName: booker.name.trim(),
       bookerPhone: booker.phone.trim(),
       bookerEmail: booker.email.trim(),
-      pickupLocation: pickupLocation.trim(),
+      pickupLocation: ctx.service.fixedLocation || pickupLocation.trim(),
       passengers: clean,
     });
     setBusy(false);
@@ -318,12 +273,13 @@ function ManageView({ store }) {
     setMessage("Your booking has been cancelled. The seats are now free again.");
   }
 
-  const editRun =
-    ctx && isArrival
-      ? { kind: "slot", slotLabel: ctx.slot.label, time: ctx.slot.time }
-      : ctx
-        ? { kind: "departure", time: ctx.departure.time, van: ctx.van, point: ctx.point }
-        : null;
+  const editRun = ctx
+    ? {
+        time: ctx.departure.time,
+        van: ctx.van,
+        location: ctx.service.fixedLocation,
+      }
+    : null;
   const editSeatsLeft =
     ctx && found ? store.seatsLeftByRun(found.runId) + found.seats : 0;
 
@@ -365,10 +321,7 @@ function ManageView({ store }) {
             </div>
             <div style={S.ticketRow}>
               <span>{disp.locationRole}</span>
-              <strong>
-                {disp.locationValue}
-                {disp.locationNote ? ` (${disp.locationNote})` : ""}
-              </strong>
+              <strong>{disp.locationValue}</strong>
             </div>
             <div style={S.ticketRow}>
               <span>Van</span>
@@ -410,12 +363,11 @@ function ManageView({ store }) {
         </>
       )}
 
-      {found && editing && editRun && (
+      {found && editing && ctx && editRun && (
         <FormStep
           heading="Edit your booking"
           service={ctx.service}
           run={editRun}
-          isArrival={isArrival}
           names={names}
           setNames={setNames}
           booker={booker}
@@ -435,7 +387,7 @@ function ManageView({ store }) {
   );
 }
 
-/* ---------- Admin (organizer + head-driver tooling) ---------- */
+/* ---------- Admin (organizer view) ---------- */
 
 function AdminView({ store }) {
   const needsPasscode = BACKEND === "supabase";
@@ -477,26 +429,11 @@ function AdminView({ store }) {
     if (res.ok) load(needsPasscode ? passcode : "");
   }
 
-  async function assign(ref, van) {
-    const res = await store.assignVan(ref, van || null, needsPasscode ? passcode : "");
-    if (res.ok) {
-      setRows((prev) =>
-        prev.map((b) => (b.ref === ref ? { ...b, assignedVan: van || null } : b))
-      );
-    } else {
-      setError(
-        res.code === "FORBIDDEN"
-          ? "Passcode not accepted for van assignment."
-          : "Could not assign the van. Please try again."
-      );
-    }
-  }
-
   return (
     <section>
       <StepLabel n="♦">Bookings</StepLabel>
       <p style={S.noteText}>
-        Organizer + head-driver view.
+        Organizer view of every booking.
         {needsPasscode
           ? " Passcode-protected so guest details aren't public."
           : " Local demo — resets on refresh."}
@@ -550,109 +487,19 @@ function AdminView({ store }) {
 
           {rows.length === 0 && <div style={S.emptyState}>No bookings yet.</div>}
 
-          {sections.map((sec) =>
-            sec.ctx?.slot ? (
-              <ArrivalSlotSection
-                key={sec.runId}
-                sec={sec}
-                onAssign={assign}
-                onCancel={cancelOne}
-              />
-            ) : (
-              <DepartureSection key={sec.runId} sec={sec} onCancel={cancelOne} />
-            )
-          )}
+          {sections.map((sec) => (
+            <RunSection key={sec.runId} sec={sec} onCancel={cancelOne} />
+          ))}
         </>
       )}
     </section>
   );
 }
 
-// Arrival slot: pickup locations + per-van assignment.
-function ArrivalSlotSection({ sec, onAssign, onCancel }) {
-  const { service, slot, capacity } = sec.ctx;
-  const vans = assignableVans(service);
-  const list = [...sec.list].sort((a, b) =>
-    (a.pickupLocation || "").localeCompare(b.pickupLocation || "")
-  );
-  const taken = sec.list.reduce((n, b) => n + b.seats, 0);
-  const tally = {};
-  for (const v of vans) tally[v] = 0;
-  let unassigned = 0;
-  for (const b of sec.list) {
-    if (b.assignedVan && b.assignedVan in tally) tally[b.assignedVan] += b.seats;
-    else unassigned += b.seats;
-  }
-
-  return (
-    <div style={S.runGroup}>
-      <div style={S.runGroupHead}>
-        <span>
-          {slot.label} · {slot.time}
-        </span>
-        <span style={{ fontSize: 14, color: "#a4562a" }}>
-          {taken}/{capacity} seats
-        </span>
-      </div>
-      <div style={{ fontSize: 13, color: "#8a7150", marginTop: -6, marginBottom: 8 }}>
-        {service.label} · assign each group to a van
-      </div>
-
-      <div style={S.tallyRow}>
-        {vans.map((v) => (
-          <span
-            key={v}
-            style={{ ...S.tallyChip, ...(tally[v] > 10 ? S.tallyChipOver : null) }}
-          >
-            {v}: {tally[v]}/10
-          </span>
-        ))}
-        {unassigned > 0 && (
-          <span style={{ ...S.tallyChip, ...S.tallyChipUnassigned }}>
-            Unassigned: {unassigned}
-          </span>
-        )}
-      </div>
-
-      {list.map((b) => (
-        <div key={b.ref} style={S.bookingCard}>
-          <div style={S.bookingHeadRow}>
-            <div>
-              <strong>📍 {b.pickupLocation || "(no location given)"}</strong>
-              <div style={S.meta}>
-                {b.bookerName} · {b.bookerPhone} · {b.seats} seat
-                {b.seats === 1 ? "" : "s"}{" "}
-                <span style={{ color: "#a4562a" }}>({b.ref})</span>
-              </div>
-              <div style={S.meta}>{b.passengers.join(", ")}</div>
-              <div style={{ marginTop: 6 }}>
-                <select
-                  style={S.assignSelect}
-                  value={b.assignedVan || ""}
-                  onChange={(e) => onAssign(b.ref, e.target.value)}
-                >
-                  <option value="">— Assign van —</option>
-                  {vans.map((v) => (
-                    <option key={v} value={v}>
-                      {v}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-            <button style={S.dangerBtn} onClick={() => onCancel(b.ref)}>
-              Cancel
-            </button>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// After-party departure: one van at a fixed time.
-function DepartureSection({ sec, onCancel }) {
+// One run: a van at a fixed time, to/from the fixed location.
+function RunSection({ sec, onCancel }) {
   const { service, van, departure } = sec.ctx;
+  const location = service.fixedLocation;
   const taken = sec.list.reduce((n, b) => n + b.seats, 0);
   return (
     <div style={S.runGroup}>
@@ -663,18 +510,22 @@ function DepartureSection({ sec, onCancel }) {
         <span style={{ fontSize: 14, color: "#a4562a" }}>{taken}/10 seats</span>
       </div>
       <div style={{ fontSize: 13, color: "#8a7150", marginTop: -6 }}>
-        {service.label} · drop-offs below
+        {service.label}
+        {location ? ` · ${service.locationRole}: ${location}` : ""}
       </div>
       {sec.list.map((b) => (
         <div key={b.ref} style={S.bookingCard}>
           <div style={S.bookingHeadRow}>
             <div>
-              <strong>📍 {b.pickupLocation || "(no drop-off given)"}</strong>
+              <strong>{b.bookerName}</strong>{" "}
+              <span style={{ color: "#a4562a" }}>({b.ref})</span>
+              {!location && b.pickupLocation && (
+                <div style={S.meta}>📍 {b.pickupLocation}</div>
+              )}
               <div style={S.meta}>
-                {b.bookerName} · {b.bookerPhone}
+                {b.bookerPhone}
                 {b.bookerEmail ? ` · ${b.bookerEmail}` : ""} · {b.seats} seat
-                {b.seats === 1 ? "" : "s"}{" "}
-                <span style={{ color: "#a4562a" }}>({b.ref})</span>
+                {b.seats === 1 ? "" : "s"}
               </div>
               <div style={S.meta}>{b.passengers.join(", ")}</div>
             </div>
@@ -762,9 +613,8 @@ function ServiceStep({ onPick, seatsLeftByRun, loading }) {
       <div className="rustic-grid-2">
         {SERVICES.map((s) => {
           const total = serviceSeatsLeft(s, seatsLeftByRun);
-          const count =
-            s.model === "slots" ? s.slots.length : s.departures.length;
-          const unit = s.model === "slots" ? "pickup times" : "departure times";
+          const unit =
+            s.locationRole === "Pickup" ? "pickup times" : "departure times";
           return (
             <button
               key={s.id}
@@ -777,7 +627,7 @@ function ServiceStep({ onPick, seatsLeftByRun, loading }) {
               <div style={S.pointNote}>{s.blurb}</div>
               <div style={S.divider} />
               <div style={S.pointMeta}>
-                {count} {unit} · {total} seats available
+                {s.departures.length} {unit} · {total} seats available
               </div>
               <div style={S.chooseHint}>Select →</div>
             </button>
@@ -794,7 +644,6 @@ function seatTone(left) {
   return { bg: "#e4ead9", fg: "#4f6135", label: `${left} left` };
 }
 
-// Generic time-card picker used by both arrival slots and after-party departures.
 function TimeCard({ title, subtitle, left, onPick }) {
   const tone = seatTone(left);
   const full = left <= 0;
@@ -822,42 +671,24 @@ function TimeCard({ title, subtitle, left, onPick }) {
   );
 }
 
-function SlotStep({ service, seatsLeftByRun, onBack, onPick }) {
-  return (
-    <section>
-      <button style={S.back} onClick={onBack}>
-        ← Change shuttle
-      </button>
-      <StepLabel n="2">Choose your pickup time</StepLabel>
-      <div className="rustic-grid-2">
-        {service.slots.map((slot) => (
-          <TimeCard
-            key={slot.id}
-            title={slot.label}
-            subtitle={slot.time}
-            left={seatsLeftByRun(slot.id)}
-            onPick={() => onPick(slot)}
-          />
-        ))}
-      </div>
-      {BOARDING_NOTE && <p style={S.boardingNote}>⏱ {BOARDING_NOTE}</p>}
-    </section>
-  );
-}
-
 function DepartureStep({ service, seatsLeftByRun, onBack, onPick }) {
+  const heading =
+    service.locationRole === "Pickup"
+      ? "Choose your pickup time"
+      : "Choose your departure time";
   return (
     <section>
       <button style={S.back} onClick={onBack}>
         ← Change shuttle
       </button>
-      <StepLabel n="2">Choose your departure time</StepLabel>
+      <StepLabel n="2">{heading}</StepLabel>
       <p style={{ ...S.noteText, marginTop: -6 }}>{service.blurb}</p>
       <div className="rustic-grid-2">
         {service.departures.map((dep) => (
           <TimeCard
             key={dep.id}
             title={dep.time}
+            subtitle={vanLabel(dep.van, service.vanPlates?.[dep.van])}
             left={seatsLeftByRun(dep.id)}
             onPick={() => onPick(dep)}
           />
@@ -872,7 +703,6 @@ function FormStep({
   heading,
   service,
   run,
-  isArrival,
   names,
   setNames,
   booker,
@@ -887,6 +717,9 @@ function FormStep({
   onSubmit,
   submitVerb,
 }) {
+  const isPickup = service.locationRole === "Pickup";
+  const hasLocationField = !service.fixedLocation;
+
   function updateName(i, val) {
     const next = [...names];
     next[i] = val;
@@ -911,26 +744,16 @@ function FormStep({
 
       <div style={S.summaryBox}>
         <div style={S.summaryEyebrow}>{service.label}</div>
-        {isArrival ? (
-          <>
-            <div>
-              <strong>{run.slotLabel}</strong> — {run.time}
-            </div>
-            <div style={S.summaryTrip}>
-              We'll pick you up at the location you enter below.
-            </div>
-          </>
-        ) : (
-          <>
-            <div>
-              <strong>Departure · {run.time}</strong>
-            </div>
-            <div style={S.summaryTrip}>
-              {vanLabel(run.van.name, run.van.plate)} — we'll drop you at the
-              location you enter below.
-            </div>
-          </>
-        )}
+        <div>
+          <strong>
+            {isPickup ? "Pickup" : "Departure"} · {run.time}
+          </strong>
+        </div>
+        <div style={S.summaryTrip}>
+          {vanLabel(run.van.name, run.van.plate)} —{" "}
+          {isPickup ? "we'll pick you up at " : "we'll drop you at "}
+          {service.fixedLocation || "the location you enter below"}
+        </div>
         <div style={S.summarySeats}>
           {seatsLeft} seat{seatsLeft === 1 ? "" : "s"} available · booking{" "}
           {filledCount || 0}
@@ -960,22 +783,26 @@ function FormStep({
         onChange={(e) => setBooker({ ...booker, email: e.target.value })}
       />
 
-      <label style={S.fieldLabel}>
-        {service.locationRole} location{" "}
-        <span style={{ color: "#a4562a", fontStyle: "normal" }}>
-          ({isArrival ? "where should we get you?" : "where should we take you?"})
-        </span>
-      </label>
-      <input
-        style={S.input}
-        placeholder={
-          isArrival
-            ? "Hotel, address, or landmark in town"
-            : "Where should we drop you off?"
-        }
-        value={pickupLocation}
-        onChange={(e) => setPickupLocation(e.target.value)}
-      />
+      {hasLocationField && (
+        <>
+          <label style={S.fieldLabel}>
+            {service.locationRole} location{" "}
+            <span style={{ color: "#a4562a", fontStyle: "normal" }}>
+              ({isPickup ? "where should we get you?" : "where should we take you?"})
+            </span>
+          </label>
+          <input
+            style={S.input}
+            placeholder={
+              isPickup
+                ? "Hotel, address, or landmark"
+                : "Where should we drop you off?"
+            }
+            value={pickupLocation}
+            onChange={(e) => setPickupLocation(e.target.value)}
+          />
+        </>
+      )}
 
       <label style={{ ...S.fieldLabel, marginTop: 18 }}>Passenger name(s)</label>
       {names.map((nm, i) => (
@@ -1043,12 +870,6 @@ function DoneStep({ confirmation, onAgain }) {
           <span>{confirmation.locationRole}</span>
           <strong>{confirmation.locationValue}</strong>
         </div>
-        {confirmation.locationNote && (
-          <div style={S.ticketRow}>
-            <span>Where</span>
-            <strong>{confirmation.locationNote}</strong>
-          </div>
-        )}
         <div style={S.ticketRow}>
           <span>Van</span>
           <strong>{confirmation.van}</strong>
@@ -1110,11 +931,7 @@ function Footer() {
 
 /* ---------- Shared validation + helpers ---------- */
 
-function validateBooking(
-  booker,
-  cleanNames,
-  { requireLocation, pickupLocation, locationRole } = {}
-) {
+function validateBooking(booker, cleanNames, { requireLocation, pickupLocation, locationRole } = {}) {
   if (!booker.name.trim()) return "Please enter the booker's name.";
   if (!booker.phone.trim()) return "Please enter a contact number.";
   if (booker.email.trim() && !booker.email.includes("@"))
@@ -1155,13 +972,9 @@ function exportCsv(bookings) {
   ];
   const rows = bookings.map((b) => {
     const ctx = findRunContext(b.runId);
-    const when = ctx?.slot
-      ? `${ctx.slot.label} ${ctx.slot.time}`
-      : ctx?.departure
-        ? ctx.departure.time
-        : "";
-    const loc = b.pickupLocation || (ctx?.point?.name ?? "");
-    const van = ctx?.slot ? (b.assignedVan ?? "") : (ctx?.van?.name ?? "");
+    const when = ctx?.departure ? ctx.departure.time : "";
+    const loc = ctx?.service?.fixedLocation || b.pickupLocation || "";
+    const van = ctx?.van?.name ?? "";
     return [
       b.ref,
       ctx?.service?.label ?? "",
