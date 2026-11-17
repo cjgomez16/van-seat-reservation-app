@@ -30,6 +30,11 @@ const BOARDING_NOTE =
 // Where "book again" points.
 const SITE_URL = "https://vanreservation.sgcoordination.com";
 
+// Couple + date shown in the email header. Keep in sync with COUPLE/EVENT_DATE
+// in src/config.js, and with the FROM_EMAIL secret's display name.
+const EVENT_COUPLE = "Coco & Gary";
+const EVENT_DATE = "November 20, 2026";
+
 const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
 
 type Booking = {
@@ -167,7 +172,7 @@ function renderEmail(d: {
   return `
   <div style="background:#f1e7d5;padding:28px 16px;font-family:Georgia,'Times New Roman',serif;">
     <div style="max-width:520px;margin:0 auto;background:#fffdf8;border:1px solid #e0d0b5;border-radius:6px;padding:28px 26px;">
-      <p style="margin:0 0 4px;color:#a4562a;font-style:italic;font-size:15px;">Candy &amp; Jonas · October 1, 2026</p>
+      <p style="margin:0 0 4px;color:#a4562a;font-style:italic;font-size:15px;">${escapeHtml(EVENT_COUPLE)} · ${escapeHtml(EVENT_DATE)}</p>
       <h1 style="margin:0 0 12px;color:#4a3723;font-size:26px;">${escapeHtml(d.heading)}</h1>
       <p style="margin:0 0 18px;color:#6b563d;font-size:15px;line-height:1.5;">${escapeHtml(d.lead)}</p>
 
