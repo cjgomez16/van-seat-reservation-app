@@ -59,6 +59,7 @@ export const SERVICES = [
     departures: [
       { id: "ap-2130", time: "9:30 PM", van: "Van 1" },
       { id: "ap-2230", time: "10:30 PM", van: "Van 2" },
+      { id: "ap-2300", time: "11:00 PM", van: "Van 1" },
     ],
   },
 ];
