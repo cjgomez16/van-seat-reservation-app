@@ -29,6 +29,14 @@ export const EVENT_DATE = "November 20, 2026";
 export const BOARDING_NOTE =
   "Please be at your pickup point 10–15 minutes before departure.";
 
+// Booking status. Set BOOKING_OPEN to false to CLOSE online booking: a popup
+// shows on load and the booking flow is replaced with a "closed" message that
+// directs guests to call CONTACT_NUMBER. Flip back to true (and redeploy) to
+// reopen. Manage-booking and the organizer view stay available either way.
+export const BOOKING_OPEN = false;
+export const CONTACT_NUMBER = "0917 853 0290"; // display
+export const CONTACT_TEL = "+639178530290"; // tel: link
+
 export const SERVICES = [
   {
     id: "arrival",

@@ -6,6 +6,9 @@ import {
   COUPLE,
   VENUE,
   BOARDING_NOTE,
+  BOOKING_OPEN,
+  CONTACT_NUMBER,
+  CONTACT_TEL,
   findRunContext,
 } from "./config.js";
 import { useBookings, BACKEND } from "./store.js";
@@ -38,21 +41,72 @@ function runDisplay(ctx, booking) {
 export default function App() {
   const store = useBookings();
   const [view, setView] = useState("book"); // book | manage | admin
+  const [showClosed, setShowClosed] = useState(!BOOKING_OPEN);
 
   return (
     <div style={S.page}>
       <style>{GLOBAL_CSS}</style>
+      {!BOOKING_OPEN && showClosed && (
+        <ClosedPopup onClose={() => setShowClosed(false)} />
+      )}
       <div style={S.frame}>
         <Header />
         <Nav view={view} setView={setView} />
 
-        {view === "book" && <BookFlow store={store} />}
+        {view === "book" &&
+          (BOOKING_OPEN ? <BookFlow store={store} /> : <ClosedNotice />)}
         {view === "manage" && <ManageView store={store} />}
         {view === "admin" && <AdminView store={store} />}
 
         <Footer />
       </div>
     </div>
+  );
+}
+
+/* ---------- Booking-closed states ---------- */
+
+function ClosedPopup({ onClose }) {
+  return (
+    <div
+      style={S.modalOverlay}
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+    >
+      <div style={S.modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={S.sprig}>❧</div>
+        <h2 style={S.modalTitle}>Booking is closed</h2>
+        <p style={S.modalText}>
+          Online seat reservations for the wedding shuttle are now closed. To
+          request a seat, please contact us directly:
+        </p>
+        <a href={`tel:${CONTACT_TEL}`} style={S.modalPhone}>
+          {CONTACT_NUMBER}
+        </a>
+        <div>
+          <button style={{ ...S.secondaryBtn, marginTop: 22 }} onClick={onClose}>
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ClosedNotice() {
+  return (
+    <section style={{ textAlign: "center" }}>
+      <div style={S.closedIcon}>🚐</div>
+      <h2 style={S.doneTitle}>Booking is closed</h2>
+      <p style={S.doneSub}>
+        Online seat reservations are now closed. To request a seat, please
+        contact us directly:
+      </p>
+      <a href={`tel:${CONTACT_TEL}`} style={S.modalPhone}>
+        {CONTACT_NUMBER}
+      </a>
+    </section>
   );
 }
 
